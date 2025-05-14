@@ -1,0 +1,1438 @@
+===== backend/__init__.py =====
+===== backend/schemas.py =====
+# backend/schemas.py
+
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+
+# ---- 0) Ask request ----
+
+class AskRequest(BaseModel):
+    unit_id: int
+    question: str
+
+
+# ---- 1) Hierarchy CRUD schemas ----
+
+class CourseBase(BaseModel):
+    name: str
+
+class CourseCreate(CourseBase):
+    pass
+
+class Course(CourseBase):
+    id: int
+
+    model_config = {"from_attributes": True}
+
+
+class YearBase(BaseModel):
+    name: str
+
+class YearCreate(YearBase):
+    pass
+
+class Year(YearBase):
+    id: int
+    course_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class SemesterBase(BaseModel):
+    name: str
+
+class SemesterCreate(SemesterBase):
+    pass
+
+class Semester(SemesterBase):
+    id: int
+    year_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class UnitBase(BaseModel):
+    name: str
+
+class UnitCreate(UnitBase):
+    pass
+
+class Unit(UnitBase):
+    id: int
+    semester_id: int
+
+    model_config = {"from_attributes": True}
+
+
+# ---- 2) Document schemas ----
+
+class DocumentBase(BaseModel):
+    filename: str
+
+class Document(DocumentBase):
+    """
+    Response model for POST /documents/
+    """
+    id: int
+    filepath: str
+    unit_id: int
+
+    model_config = {
+        "from_attributes": True,
+    }
+
+class DocumentWithPath(BaseModel):
+    """
+    Response model for GET /documents/
+    """
+    id: int
+    filename: str
+    filepath: str
+    course_path: str
+
+    model_config = {
+        "from_attributes": True,
+    }
+
+
+# ---- 3) Nested output for /tree/ ----
+
+class UnitOut(BaseModel):
+    id: int
+    name: str
+
+    model_config = {"from_attributes": True}
+
+class SemesterOut(BaseModel):
+    id: int
+    name: str
+    units: List[UnitOut]
+
+    model_config = {"from_attributes": True}
+
+class YearOut(BaseModel):
+    id: int
+    name: str
+    semesters: List[SemesterOut]
+
+    model_config = {"from_attributes": True}
+
+class CourseOut(BaseModel):
+    id: int
+    name: str
+    years: List[YearOut]
+
+    model_config = {"from_attributes": True}
+===== backend/database.py =====
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+# Use environment variable or fallback to local SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag.db")
+
+# SQLite requires this flag
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+===== backend/models.py =====
+# models.py
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
+from sqlalchemy.orm import relationship
+from database import Base
+
+class Course(Base):
+    __tablename__ = "courses"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+
+    years = relationship(
+        "Year", back_populates="course", cascade="all, delete-orphan"
+    )
+
+class Year(Base):
+    __tablename__ = "years"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"))
+
+    course = relationship("Course", back_populates="years")
+    semesters = relationship(
+        "Semester", back_populates="year", cascade="all, delete-orphan"
+    )
+
+class Semester(Base):
+    __tablename__ = "semesters"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    year_id = Column(Integer, ForeignKey("years.id"))
+
+    year = relationship("Year", back_populates="semesters")
+    units = relationship(
+        "Unit", back_populates="semester", cascade="all, delete-orphan"
+    )
+
+class Unit(Base):
+    __tablename__ = "units"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    semester_id = Column(Integer, ForeignKey("semesters.id"))
+
+    semester = relationship("Semester", back_populates="units")
+    documents = relationship(
+        "Document", back_populates="unit", cascade="all, delete-orphan"
+    )
+
+class Document(Base):
+    __tablename__ = "documents"
+    id = Column(Integer, primary_key=True, index=True)
+    original_filename = Column(String)
+    filename = Column(String, unique=True, index=True)
+    path = Column(String)
+    processed = Column(Boolean, default=False)
+    course_id = Column(Integer, ForeignKey("courses.id"))
+    year_id = Column(Integer, ForeignKey("years.id"))
+    semester_id = Column(Integer, ForeignKey("semesters.id"))
+    unit_id = Column(Integer, ForeignKey("units.id"))
+
+    unit = relationship("Unit", back_populates="documents")===== backend/main.py =====
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from typing import List
+from database import SessionLocal, engine
+import models
+import schemas
+import os
+from datetime import datetime
+
+# === New: Embedding + Processing Setup ===
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+import fitz  # PyMuPDF
+import faiss
+import numpy as np
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+dimension = 384  # For all-MiniLM-L6-v2
+faiss_index = faiss.IndexFlatL2(dimension)
+doc_id_map = {}  # FAISS index → {doc_id, chunk}
+
+# Create tables
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+# CORS setup
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# DB session dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# =========================
+# COURSE
+# =========================
+
+@app.post("/courses/", response_model=schemas.Course)
+def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    db_course = models.Course(name=course.name)
+    db.add(db_course)
+    db.commit()
+    db.refresh(db_course)
+    return db_course
+
+@app.get("/courses/", response_model=List[schemas.CourseOut])
+def get_courses(db: Session = Depends(get_db)):
+    return db.query(models.Course).all()
+
+@app.get("/courses/{course_id}", response_model=schemas.Course)
+def get_course(course_id: int, db: Session = Depends(get_db)):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+@app.put("/courses/{course_id}", response_model=schemas.Course)
+def update_course(course_id: int, course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    db_course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not db_course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    db_course.name = course.name
+    db.commit()
+    db.refresh(db_course)
+    return db_course
+
+@app.delete("/courses/{course_id}")
+def delete_course(course_id: int, db: Session = Depends(get_db)):
+    db_course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not db_course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    db.delete(db_course)
+    db.commit()
+    return {"message": "Course deleted"}
+
+# =========================
+# YEAR
+# =========================
+
+@app.post("/courses/{course_id}/years/", response_model=schemas.Year)
+def create_year(course_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    db_year = models.Year(name=year.name, course_id=course_id)
+    db.add(db_year)
+    db.commit()
+    db.refresh(db_year)
+    return db_year
+
+@app.get("/courses/{course_id}/years/", response_model=List[schemas.Year])
+def get_years(course_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Year).filter(models.Year.course_id == course_id).all()
+
+@app.put("/years/{year_id}", response_model=schemas.Year)
+def update_year(year_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    db_year = db.query(models.Year).filter(models.Year.id == year_id).first()
+    if not db_year:
+        raise HTTPException(status_code=404, detail="Year not found")
+    db_year.name = year.name
+    db.commit()
+    db.refresh(db_year)
+    return db_year
+
+@app.delete("/years/{year_id}")
+def delete_year(year_id: int, db: Session = Depends(get_db)):
+    db_year = db.query(models.Year).filter(models.Year.id == year_id).first()
+    if not db_year:
+        raise HTTPException(status_code=404, detail="Year not found")
+    db.delete(db_year)
+    db.commit()
+    return {"message": "Year deleted"}
+
+# =========================
+# SEMESTER
+# =========================
+
+@app.post("/years/{year_id}/semesters/", response_model=schemas.Semester)
+def create_semester(year_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    db_semester = models.Semester(name=semester.name, year_id=year_id)
+    db.add(db_semester)
+    db.commit()
+    db.refresh(db_semester)
+    return db_semester
+
+@app.get("/years/{year_id}/semesters/", response_model=List[schemas.Semester])
+def get_semesters(year_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Semester).filter(models.Semester.year_id == year_id).all()
+
+@app.put("/semesters/{semester_id}", response_model=schemas.Semester)
+def update_semester(semester_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    db_semester = db.query(models.Semester).filter(models.Semester.id == semester_id).first()
+    if not db_semester:
+        raise HTTPException(status_code=404, detail="Semester not found")
+    db_semester.name = semester.name
+    db.commit()
+    db.refresh(db_semester)
+    return db_semester
+
+@app.delete("/semesters/{semester_id}")
+def delete_semester(semester_id: int, db: Session = Depends(get_db)):
+    db_semester = db.query(models.Semester).filter(models.Semester.id == semester_id).first()
+    if not db_semester:
+        raise HTTPException(status_code=404, detail="Semester not found")
+    db.delete(db_semester)
+    db.commit()
+    return {"message": "Semester deleted"}
+
+# =========================
+# UNIT
+# =========================
+
+@app.post("/semesters/{semester_id}/units/", response_model=schemas.Unit)
+def create_unit(semester_id: int, unit: schemas.UnitCreate, db: Session = Depends(get_db)):
+    db_unit = models.Unit(name=unit.name, semester_id=semester_id)
+    db.add(db_unit)
+    db.commit()
+    db.refresh(db_unit)
+    return db_unit
+
+@app.get("/semesters/{semester_id}/units/", response_model=List[schemas.Unit])
+def get_units(semester_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Unit).filter(models.Unit.semester_id == semester_id).all()
+
+@app.put("/units/{unit_id}", response_model=schemas.Unit)
+def update_unit(unit_id: int, unit: schemas.UnitCreate, db: Session = Depends(get_db)):
+    db_unit = db.query(models.Unit).filter(models.Unit.id == unit_id).first()
+    if not db_unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    db_unit.name = unit.name
+    db.commit()
+    db.refresh(db_unit)
+    return db_unit
+
+@app.delete("/units/{unit_id}")
+def delete_unit(unit_id: int, db: Session = Depends(get_db)):
+    db_unit = db.query(models.Unit).filter(models.Unit.id == unit_id).first()
+    if not db_unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    db.delete(db_unit)
+    db.commit()
+    return {"message": "Unit deleted"}
+
+# =========================
+# DOCUMENT
+# =========================
+
+UPLOAD_DIR = "media/documents"
+
+@app.post("/documents/", response_model=schemas.Document)
+async def upload_document(
+    file: UploadFile = File(...),
+    unit_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    save_name = f"{timestamp}_{file.filename}"
+    file_path = os.path.join(UPLOAD_DIR, save_name)
+
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    doc = models.Document(filename=file.filename, filepath=file_path, unit_id=unit_id)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+@app.get("/documents/", response_model=List[schemas.DocumentWithPath])
+def get_documents(db: Session = Depends(get_db)):
+    documents = db.query(models.Document).all()
+    result = []
+    for doc in documents:
+        unit = doc.unit
+        sem = unit.semester
+        year = sem.year
+        course = year.course
+        course_path = f"{course.name} → {year.name} → {sem.name} → {unit.name}"
+        result.append({
+            "id": doc.id,
+            "filename": doc.filename,
+            "filepath": doc.filepath,
+            "course_path": course_path
+        })
+    return result
+
+@app.get("/documents/download/{doc_id}")
+def download_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not os.path.exists(doc.filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(doc.filepath, filename=doc.filename, media_type="application/octet-stream")
+
+@app.delete("/documents/{doc_id}")
+def delete_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if os.path.exists(doc.filepath):
+        os.remove(doc.filepath)
+    db.delete(doc)
+    db.commit()
+    return {"message": "Document deleted"}
+
+# ✅ NEW: PROCESS DOCUMENT
+@app.post("/documents/{doc_id}/process")
+def process_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        with fitz.open(doc.filepath) as pdf:
+            text = ""
+            for page in pdf:
+                text += page.get_text()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(e)}")
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(text)
+    embeddings = embedding_model.encode(chunks)
+    start_idx = faiss_index.ntotal
+    faiss_index.add(np.array(embeddings).astype("float32"))
+
+    for i, chunk in enumerate(chunks):
+        doc_id_map[start_idx + i] = {
+            "doc_id": doc.id,
+            "chunk": chunk
+        }
+
+    return {"message": f"Processed {len(chunks)} chunks from '{doc.filename}'"}
+
+# =========================
+# TREE
+# =========================
+
+@app.get("/tree/", response_model=List[schemas.Course])
+def get_full_tree(db: Session = Depends(get_db)):
+    return db.query(models.Course).all()===== frontend/src/app/year/page.tsx =====
+'use client'
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+interface Course {
+  id: number
+  name: string
+}
+
+export default function YearPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
+  const [yearName, setYearName] = useState("")
+  const [success, setSuccess] = useState(false)
+
+  // Fetch courses on page load
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const res = await axios.get("http://127.0.0.1:8000/courses/")
+        setCourses(res.data)
+      } catch (err) {
+        console.error("Error fetching courses", err)
+      }
+    }
+    fetchCourses()
+  }, [])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedCourseId) {
+      alert("Please select a course")
+      return
+    }
+
+    try {
+      const res = await axios.post(
+        `http://127.0.0.1:8000/courses/${selectedCourseId}/years/`,
+        { name: yearName }
+      )
+      if (res.status === 200 || res.status === 201) {
+        setSuccess(true)
+        setYearName("")
+      }
+    } catch (err) {
+      console.error("Error creating year", err)
+    }
+  }
+
+  return (
+    <div className="max-w-xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-2xl font-bold mb-4">Create Year</h1>
+
+      <form onSubmit={handleSubmit}>
+        <label className="block mb-2">Select Course</label>
+        <select
+          className="border p-2 w-full mb-4"
+          onChange={(e) => setSelectedCourseId(Number(e.target.value))}
+          defaultValue=""
+        >
+          <option value="" disabled>Select a course</option>
+          {courses.map(course => (
+            <option key={course.id} value={course.id}>
+              {course.name}
+            </option>
+          ))}
+        </select>
+
+        <input
+          className="border p-2 w-full mb-4"
+          type="text"
+          placeholder="Year Name (e.g. Year 1)"
+          value={yearName}
+          onChange={(e) => setYearName(e.target.value)}
+          required
+        />
+
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+          Create Year
+        </button>
+      </form>
+
+      {success && <p className="text-green-600 mt-4">Year created successfully!</p>}
+    </div>
+  )
+}
+===== frontend/src/app/ask/page.tsx =====
+'use client'
+
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+
+interface Course { id: number; name: string }
+interface Year { id: number; name: string }
+interface Semester { id: number; name: string }
+interface Unit { id: number; name: string }
+
+export default function AskPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
+  const [selectedYearId, setSelectedYearId] = useState<number | null>(null)
+  const [selectedSemesterId, setSelectedSemesterId] = useState<number | null>(null)
+  const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null)
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  // Load courses on mount
+  useEffect(() => {
+    axios.get("http://127.0.0.1:8000/courses/").then(res => setCourses(res.data))
+  }, [])
+
+  // Load years
+  useEffect(() => {
+    if (selectedCourseId) {
+      axios.get(\`http://127.0.0.1:8000/courses/\${selectedCourseId}/years/\`).then(res => setYears(res.data))
+      setSemesters([]); setUnits([]); setSelectedYearId(null); setSelectedSemesterId(null); setSelectedUnitId(null)
+    }
+  }, [selectedCourseId])
+
+  // Load semesters
+  useEffect(() => {
+    if (selectedYearId) {
+      axios.get(\`http://127.0.0.1:8000/years/\${selectedYearId}/semesters/\`).then(res => setSemesters(res.data))
+      setUnits([]); setSelectedSemesterId(null); setSelectedUnitId(null)
+    }
+  }, [selectedYearId])
+
+  // Load units
+  useEffect(() => {
+    if (selectedSemesterId) {
+      axios.get(\`http://127.0.0.1:8000/semesters/\${selectedSemesterId}/units/\`).then(res => setUnits(res.data))
+      setSelectedUnitId(null)
+    }
+  }, [selectedSemesterId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedUnitId || !question.trim()) return alert("Please select a unit and type your question.")
+    setLoading(true)
+    setAnswer('')
+    try {
+      const res = await axios.post("http://127.0.0.1:8000/ask/", {
+        unit_id: selectedUnitId,
+        question
+      })
+      setAnswer(res.data.answer)
+    } catch (err) {
+      console.error(err)
+      alert("Failed to get answer")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto mt-10 p-6 border rounded shadow bg-white">
+      <h1 className="text-2xl font-bold mb-4">📚 Ask a Question</h1>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <select className="w-full p-2 border" onChange={e => setSelectedCourseId(Number(e.target.value))} value={selectedCourseId || ''}>
+          <option value="" disabled>Select Course</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+
+        {years.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedYearId(Number(e.target.value))} value={selectedYearId || ''}>
+            <option value="" disabled>Select Year</option>
+            {years.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+          </select>
+        )}
+
+        {semesters.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedSemesterId(Number(e.target.value))} value={selectedSemesterId || ''}>
+            <option value="" disabled>Select Semester</option>
+            {semesters.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
+
+        {units.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedUnitId(Number(e.target.value))} value={selectedUnitId || ''}>
+            <option value="" disabled>Select Unit</option>
+            {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        )}
+
+        <textarea
+          rows={4}
+          className="w-full p-2 border"
+          placeholder="Type your question here..."
+          value={question}
+          onChange={e => setQuestion(e.target.value)}
+        />
+
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded w-full" disabled={loading}>
+          {loading ? "Asking..." : "Ask"}
+        </button>
+      </form>
+
+      {answer && (
+        <div className="mt-6 p-4 bg-gray-100 rounded shadow">
+          <h2 className="text-lg font-semibold mb-2">Answer:</h2>
+          <p>{answer}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+===== frontend/src/app/semester/page.tsx =====
+'use client'
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+interface Course {
+  id: number
+  name: string
+}
+
+interface Year {
+  id: number
+  name: string
+  course_id: number
+}
+
+export default function SemesterPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
+  const [selectedYearId, setSelectedYearId] = useState<number | null>(null)
+  const [semesterName, setSemesterName] = useState("")
+  const [success, setSuccess] = useState(false)
+
+  // Fetch all courses on load
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const res = await axios.get("http://127.0.0.1:8000/courses/")
+        setCourses(res.data)
+      } catch (err) {
+        console.error("Error fetching courses", err)
+      }
+    }
+    fetchCourses()
+  }, [])
+
+  // Fetch years for selected course
+  useEffect(() => {
+    const fetchYears = async () => {
+      if (selectedCourseId) {
+        try {
+          const res = await axios.get(`http://127.0.0.1:8000/courses/${selectedCourseId}/years/`)
+          setYears(res.data)
+        } catch (err) {
+          console.error("Error fetching years", err)
+        }
+      }
+    }
+    fetchYears()
+  }, [selectedCourseId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedYearId) {
+      alert("Please select a year")
+      return
+    }
+
+    try {
+      const res = await axios.post(
+        `http://127.0.0.1:8000/years/${selectedYearId}/semesters/`,
+        { name: semesterName }
+      )
+      if (res.status === 200 || res.status === 201) {
+        setSuccess(true)
+        setSemesterName("")
+      }
+    } catch (err) {
+      console.error("Error creating semester", err)
+    }
+  }
+
+  return (
+    <div className="max-w-xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-2xl font-bold mb-4">Create Semester</h1>
+
+      <form onSubmit={handleSubmit}>
+        <label className="block mb-2">Select Course</label>
+        <select
+          className="border p-2 w-full mb-4"
+          onChange={(e) => {
+            setSelectedCourseId(Number(e.target.value))
+            setSelectedYearId(null) // reset year
+          }}
+          defaultValue=""
+        >
+          <option value="" disabled>Select a course</option>
+          {courses.map(course => (
+            <option key={course.id} value={course.id}>
+              {course.name}
+            </option>
+          ))}
+        </select>
+
+        {selectedCourseId && (
+          <>
+            <label className="block mb-2">Select Year</label>
+            <select
+              className="border p-2 w-full mb-4"
+              onChange={(e) => setSelectedYearId(Number(e.target.value))}
+              defaultValue=""
+            >
+              <option value="" disabled>Select a year</option>
+              {years.map(year => (
+                <option key={year.id} value={year.id}>
+                  {year.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <input
+          className="border p-2 w-full mb-4"
+          type="text"
+          placeholder="Semester Name (e.g. Semester 1)"
+          value={semesterName}
+          onChange={(e) => setSemesterName(e.target.value)}
+          required
+        />
+
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+          Create Semester
+        </button>
+      </form>
+
+      {success && <p className="text-green-600 mt-4">Semester created successfully!</p>}
+    </div>
+  )
+}
+===== frontend/src/app/documents/upload/page.tsx =====
+'use client'
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+interface Course { id: number; name: string }
+interface Year { id: number; name: string }
+interface Semester { id: number; name: string }
+interface Unit { id: number; name: string }
+
+export default function UploadDocumentPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
+  const [selectedYearId, setSelectedYearId] = useState<number | null>(null)
+  const [selectedSemesterId, setSelectedSemesterId] = useState<number | null>(null)
+  const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  // Load courses on mount
+  useEffect(() => {
+    axios.get("http://127.0.0.1:8000/courses/").then(res => setCourses(res.data))
+  }, [])
+
+  // Load years
+  useEffect(() => {
+    if (selectedCourseId) {
+      axios.get(`http://127.0.0.1:8000/courses/${selectedCourseId}/years/`).then(res => setYears(res.data))
+      setSemesters([]); setUnits([])
+    }
+  }, [selectedCourseId])
+
+  // Load semesters
+  useEffect(() => {
+    if (selectedYearId) {
+      axios.get(`http://127.0.0.1:8000/years/${selectedYearId}/semesters/`).then(res => setSemesters(res.data))
+      setUnits([])
+    }
+  }, [selectedYearId])
+
+  // Load units
+  useEffect(() => {
+    if (selectedSemesterId) {
+      axios.get(`http://127.0.0.1:8000/semesters/${selectedSemesterId}/units/`).then(res => setUnits(res.data))
+    }
+  }, [selectedSemesterId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!file || !selectedUnitId) return alert("Select unit and file")
+
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("unit_id", String(selectedUnitId))
+
+    try {
+      await axios.post("http://127.0.0.1:8000/documents/", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      })
+      setSuccess(true)
+      setFile(null)
+    } catch (err) {
+      console.error("Upload failed", err)
+    }
+  }
+
+  return (
+    <div className="max-w-xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-2xl font-bold mb-4">Upload Document</h1>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <select className="w-full p-2 border" onChange={e => setSelectedCourseId(Number(e.target.value))} defaultValue="">
+          <option value="" disabled>Select Course</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+
+        {years.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedYearId(Number(e.target.value))} defaultValue="">
+            <option value="" disabled>Select Year</option>
+            {years.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+          </select>
+        )}
+
+        {semesters.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedSemesterId(Number(e.target.value))} defaultValue="">
+            <option value="" disabled>Select Semester</option>
+            {semesters.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
+
+        {units.length > 0 && (
+          <select className="w-full p-2 border" onChange={e => setSelectedUnitId(Number(e.target.value))} defaultValue="">
+            <option value="" disabled>Select Unit</option>
+            {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        )}
+
+        <input type="file" className="w-full p-2 border" onChange={e => setFile(e.target.files?.[0] || null)} />
+
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded w-full">
+          Upload
+        </button>
+
+        {success && <p className="text-green-600 text-center mt-2">Upload successful!</p>}
+      </form>
+    </div>
+  )
+}
+===== frontend/src/app/documents/page.tsx =====
+'use client'
+
+import { useEffect, useState } from 'react'
+import axios from 'axios'
+
+interface Document {
+  id: number
+  filename: string
+  filepath: string
+  course_path: string
+}
+
+export default function DocumentListPage() {
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [progress, setProgress] = useState<Record<number, string[]>>({})
+
+  const fetchDocuments = () => {
+    axios.get('http://127.0.0.1:8000/documents/')
+      .then(res => setDocuments(res.data))
+      .catch(err => console.error('Error loading documents', err))
+  }
+
+  useEffect(() => {
+    fetchDocuments()
+  }, [])
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this document?')) return
+    try {
+      await axios.delete(`http://127.0.0.1:8000/documents/${id}`)
+      fetchDocuments()
+    } catch (err) {
+      console.error('Failed to delete document', err)
+    }
+  }
+
+  const handleProcess = (docId: number) => {
+    // Initialize/reset progress array for this document
+    setProgress(prev => ({ ...prev, [docId]: [] }))
+
+    // Open SSE connection
+    const evtSource = new EventSource(`http://127.0.0.1:8000/documents/${docId}/process`)
+
+    evtSource.onmessage = (event) => {
+      setProgress(prev => ({
+        ...prev,
+        [docId]: [...(prev[docId] || []), event.data]
+      }))
+    }
+
+    evtSource.onerror = () => {
+      evtSource.close()
+      fetchDocuments()
+    }
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-3xl font-bold mb-6">📄 Uploaded Documents</h1>
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="bg-gray-100 text-left">
+            <th className="p-2 border">Filename</th>
+            <th className="p-2 border">Course Path</th>
+            <th className="p-2 border">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {documents.map(doc => (
+            <tr key={doc.id} className="border-t hover:bg-gray-50">
+              <td className="p-2 border align-top">{doc.filename}</td>
+              <td className="p-2 border align-top">{doc.course_path}</td>
+              <td className="p-2 border align-top">
+                <a
+                  href={`http://127.0.0.1:8000/documents/download/${doc.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline mr-4"
+                >
+                  View
+                </a>
+                <button
+                  onClick={() => handleProcess(doc.id)}
+                  className="text-green-600 hover:underline mr-4"
+                >
+                  Process
+                </button>
+                <button
+                  onClick={() => handleDelete(doc.id)}
+                  className="text-red-600 hover:underline"
+                >
+                  Delete
+                </button>
+
+                {progress[doc.id] && (
+                  <ul className="mt-2 text-xs text-gray-600">
+                    {progress[doc.id].map((msg, idx) => (
+                      <li key={idx}>{msg}</li>
+                    ))}
+                  </ul>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+===== frontend/src/app/layout.tsx =====
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        {children}
+      </body>
+    </html>
+  );
+}
+===== frontend/src/app/tree/page.tsx =====
+'use client'
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+interface Unit { id: number; name: string }
+interface Semester { id: number; name: string; units: Unit[] }
+interface Year { id: number; name: string; semesters: Semester[] }
+interface Course { id: number; name: string; years: Year[] }
+
+export default function TreeViewPage() {
+  const [data, setData] = useState<Course[]>([])
+
+  useEffect(() => {
+    axios.get("http://127.0.0.1:8000/tree/")
+      .then(res => setData(res.data))
+      .catch(err => console.error("Error loading tree", err))
+  }, [])
+
+  return (
+    <div className="max-w-4xl mx-auto mt-10 p-4">
+      <h1 className="text-3xl font-bold mb-6">Course Structure Tree</h1>
+      <ul className="list-disc ml-6 space-y-4">
+        {data.map(course => (
+          <li key={course.id}>
+            <strong>📘 {course.name}</strong>
+            <ul className="ml-4 list-circle">
+              {course.years.map(year => (
+                <li key={year.id}>
+                  <span>📅 {year.name}</span>
+                  <ul className="ml-4 list-square">
+                    {year.semesters.map(sem => (
+                      <li key={sem.id}>
+                        <span>🗓️ {sem.name}</span>
+                        <ul className="ml-4">
+                          {sem.units.map(unit => (
+                            <li key={unit.id}>📗 {unit.name}</li>
+                          ))}
+                        </ul>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+===== frontend/src/app/unit/page.tsx =====
+'use client'
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+interface Course {
+  id: number
+  name: string
+}
+
+interface Year {
+  id: number
+  name: string
+}
+
+interface Semester {
+  id: number
+  name: string
+}
+
+export default function UnitPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null)
+  const [selectedYearId, setSelectedYearId] = useState<number | null>(null)
+  const [selectedSemesterId, setSelectedSemesterId] = useState<number | null>(null)
+
+  const [unitName, setUnitName] = useState("")
+  const [success, setSuccess] = useState(false)
+
+  // Load courses
+  useEffect(() => {
+    axios.get("http://127.0.0.1:8000/courses/")
+      .then(res => setCourses(res.data))
+      .catch(err => console.error("Error loading courses", err))
+  }, [])
+
+  // Load years when course is selected
+  useEffect(() => {
+    if (selectedCourseId) {
+      axios.get(`http://127.0.0.1:8000/courses/${selectedCourseId}/years/`)
+        .then(res => setYears(res.data))
+        .catch(err => console.error("Error loading years", err))
+    }
+  }, [selectedCourseId])
+
+  // Load semesters when year is selected
+  useEffect(() => {
+    if (selectedYearId) {
+      axios.get(`http://127.0.0.1:8000/years/${selectedYearId}/semesters/`)
+        .then(res => setSemesters(res.data))
+        .catch(err => console.error("Error loading semesters", err))
+    }
+  }, [selectedYearId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedSemesterId) return alert("Select a semester")
+
+    try {
+      const res = await axios.post(`http://127.0.0.1:8000/semesters/${selectedSemesterId}/units/`, {
+        name: unitName,
+      })
+      if (res.status === 200 || res.status === 201) {
+        setSuccess(true)
+        setUnitName("")
+      }
+    } catch (err) {
+      console.error("Error creating unit", err)
+    }
+  }
+
+  return (
+    <div className="max-w-xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-2xl font-bold mb-4">Create Unit</h1>
+      <form onSubmit={handleSubmit}>
+        <label>Select Course</label>
+        <select
+          className="border p-2 w-full mb-4"
+          onChange={(e) => {
+            setSelectedCourseId(Number(e.target.value))
+            setSelectedYearId(null)
+            setSelectedSemesterId(null)
+          }}
+          defaultValue=""
+        >
+          <option value="" disabled>Select Course</option>
+          {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+
+        {selectedCourseId && (
+          <>
+            <label>Select Year</label>
+            <select
+              className="border p-2 w-full mb-4"
+              onChange={(e) => {
+                setSelectedYearId(Number(e.target.value))
+                setSelectedSemesterId(null)
+              }}
+              defaultValue=""
+            >
+              <option value="" disabled>Select Year</option>
+              {years.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+            </select>
+          </>
+        )}
+
+        {selectedYearId && (
+          <>
+            <label>Select Semester</label>
+            <select
+              className="border p-2 w-full mb-4"
+              onChange={(e) => setSelectedSemesterId(Number(e.target.value))}
+              defaultValue=""
+            >
+              <option value="" disabled>Select Semester</option>
+              {semesters.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </>
+        )}
+
+        <input
+          className="border p-2 w-full mb-4"
+          type="text"
+          placeholder="Unit Name"
+          value={unitName}
+          onChange={(e) => setUnitName(e.target.value)}
+          required
+        />
+
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+          Create Unit
+        </button>
+      </form>
+
+      {success && <p className="text-green-600 mt-4">Unit created successfully!</p>}
+    </div>
+  )
+}
+===== frontend/src/app/page.tsx =====
+import Image from "next/image";
+
+export default function Home() {
+  return (
+    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
+      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
+        <Image
+          className="dark:invert"
+          src="/next.svg"
+          alt="Next.js logo"
+          width={180}
+          height={38}
+          priority
+        />
+        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
+          <li className="mb-2 tracking-[-.01em]">
+            Get started by editing{" "}
+            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
+              src/app/page.tsx
+            </code>
+            .
+          </li>
+          <li className="tracking-[-.01em]">
+            Save and see your changes instantly.
+          </li>
+        </ol>
+
+        <div className="flex gap-4 items-center flex-col sm:flex-row">
+          <a
+            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
+            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Image
+              className="dark:invert"
+              src="/vercel.svg"
+              alt="Vercel logomark"
+              width={20}
+              height={20}
+            />
+            Deploy now
+          </a>
+          <a
+            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
+            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Read our docs
+          </a>
+        </div>
+      </main>
+      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
+        <a
+          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
+          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Image
+            aria-hidden
+            src="/file.svg"
+            alt="File icon"
+            width={16}
+            height={16}
+          />
+          Learn
+        </a>
+        <a
+          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
+          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Image
+            aria-hidden
+            src="/window.svg"
+            alt="Window icon"
+            width={16}
+            height={16}
+          />
+          Examples
+        </a>
+        <a
+          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
+          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Image
+            aria-hidden
+            src="/globe.svg"
+            alt="Globe icon"
+            width={16}
+            height={16}
+          />
+          Go to nextjs.org →
+        </a>
+      </footer>
+    </div>
+  );
+}
+===== frontend/src/app/course/page.tsx =====
+'use client'
+
+import { useState } from "react"
+import axios from "axios"
+
+export default function CoursePage() {
+  const [name, setName] = useState("")
+  const [success, setSuccess] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    try {
+      const response = await axios.post("http://127.0.0.1:8000/courses/", { name })
+      if (response.status === 200 || response.status === 201) {
+        setSuccess(true)
+        setName("")
+      }
+    } catch (error) {
+      console.error("Error creating course:", error)
+    }
+  }
+
+  return (
+    <div className="max-w-xl mx-auto mt-10 p-4 border rounded shadow">
+      <h1 className="text-2xl font-bold mb-4">Create Course</h1>
+      <form onSubmit={handleSubmit}>
+        <input
+          className="border p-2 w-full mb-4"
+          type="text"
+          placeholder="Course Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">
+          Create Course
+        </button>
+      </form>
+      {success && <p className="text-green-600 mt-4">Course created successfully!</p>}
+    </div>
+  )
+}

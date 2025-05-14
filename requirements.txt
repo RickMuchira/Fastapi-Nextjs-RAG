@@ -1,0 +1,9 @@
+fastapi 
+uvicorn 
+sqlalchemy 
+pydantic
+faiss-cpu 
+langchain 
+sentence-transformers
+axios
+PyPDF2
