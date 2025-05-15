@@ -1,7 +1,24 @@
-'use client'
+"use client"
 
-import { useEffect, useState } from 'react'
-import axios from 'axios'
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileText, Download, Play, Trash2, Plus, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { PageHeader } from "@/components/layout/page-header"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Toaster } from "@/components/ui/sonner"
+import Link from "next/link"
 
 interface Document {
   id: number
@@ -10,100 +27,195 @@ interface Document {
   course_path: string
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 
 export default function DocumentListPage() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [progress, setProgress] = useState<Record<number, string[]>>({})
+  const [isLoading, setIsLoading] = useState(true)
+  const [processingDocId, setProcessingDocId] = useState<number | null>(null)
+  const [deletingDocId, setDeletingDocId] = useState<number | null>(null)
 
-  const fetchDocuments = () => {
-    axios.get(`${API_BASE_URL}/documents/`)
-      .then(res => setDocuments(res.data))
-      .catch(err => console.error('Error loading documents', err))
+  const fetchDocuments = async () => {
+    try {
+      setIsLoading(true)
+      const res = await axios.get(`${API_BASE_URL}/documents/`)
+      setDocuments(res.data)
+    } catch (error) {
+      toast.error("Failed to load documents")
+      console.error("Error loading documents:", error)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   useEffect(() => {
     fetchDocuments()
   }, [])
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this document?')) return
-    try {
-      await axios.delete(`${API_BASE_URL}/documents/${id}`)
-      fetchDocuments()
-    } catch (err) {
-      console.error('Failed to delete document', err)
-    }
-  }
-
   const handleProcess = (docId: number) => {
-    setProgress(prev => ({ ...prev, [docId]: [] }))
+    setProcessingDocId(docId)
+    setProgress((prev) => ({ ...prev, [docId]: [] }))
 
     const evtSource = new EventSource(`${API_BASE_URL}/documents/${docId}/process`)
 
     evtSource.onmessage = (event) => {
-      setProgress(prev => ({
+      setProgress((prev) => ({
         ...prev,
-        [docId]: [...(prev[docId] || []), event.data]
+        [docId]: [...(prev[docId] || []), event.data],
       }))
     }
 
     evtSource.onerror = () => {
       evtSource.close()
+      setProcessingDocId(null)
+      toast.success("Document processing completed")
       fetchDocuments()
     }
   }
 
-  return (
-    <div className="max-w-6xl mx-auto mt-10 p-4 border rounded shadow">
-      <h1 className="text-3xl font-bold mb-6">📄 Uploaded Documents</h1>
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="bg-gray-100 text-left">
-            <th className="p-2 border">Filename</th>
-            <th className="p-2 border">Course Path</th>
-            <th className="p-2 border">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {documents.map(doc => (
-            <tr key={doc.id} className="border-t hover:bg-gray-50">
-              <td className="p-2 border align-top">{doc.filename}</td>
-              <td className="p-2 border align-top">{doc.course_path}</td>
-              <td className="p-2 border align-top">
-                <a
-                  href={`${API_BASE_URL}/documents/download/${doc.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline mr-4"
-                >
-                  View
-                </a>
-                <button
-                  onClick={() => handleProcess(doc.id)}
-                  className="text-green-600 hover:underline mr-4"
-                >
-                  Process
-                </button>
-                <button
-                  onClick={() => handleDelete(doc.id)}
-                  className="text-red-600 hover:underline"
-                >
-                  Delete
-                </button>
+  const handleDelete = async () => {
+    if (deletingDocId === null) return
 
-                {progress[doc.id] && (
-                  <ul className="mt-2 text-xs text-gray-600">
-                    {progress[doc.id].map((msg, idx) => (
-                      <li key={idx}>{msg}</li>
-                    ))}
-                  </ul>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    try {
+      await axios.delete(`${API_BASE_URL}/documents/${deletingDocId}`)
+      toast.success("Document deleted successfully")
+      fetchDocuments()
+      setDeletingDocId(null)
+    } catch (error) {
+      toast.error("Failed to delete document")
+      console.error("Error deleting document:", error)
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Documents"
+        icon={<FileText className="h-6 w-6" />}
+        description="Manage your uploaded documents"
+      />
+
+      <div className="flex justify-end mb-4">
+        <Button asChild>
+          <Link href="/documents/upload">
+            <Plus className="mr-2 h-4 w-4" />
+            Upload New Document
+          </Link>
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Uploaded Documents</CardTitle>
+          <CardDescription>View, process, and manage your uploaded documents</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex justify-center items-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : documents.length === 0 ? (
+            <div className="text-center py-8">
+              <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
+              <h3 className="mt-4 text-lg font-medium">No documents found</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Upload your first document to get started</p>
+              <Button asChild className="mt-4">
+                <Link href="/documents/upload">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Upload Document
+                </Link>
+              </Button>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Filename</TableHead>
+                  <TableHead>Course Path</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {documents.map((doc) => (
+                  <TableRow key={doc.id}>
+                    <TableCell className="font-medium">{doc.filename}</TableCell>
+                    <TableCell>{doc.course_path}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" asChild>
+                          <a
+                            href={`${API_BASE_URL}/documents/download/${doc.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span className="sr-only">Download</span>
+                          </a>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleProcess(doc.id)}
+                          disabled={processingDocId === doc.id}
+                        >
+                          {processingDocId === doc.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">Process</span>
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setDeletingDocId(doc.id)}>
+                          <Trash2 className="h-4 w-4" />
+                          <span className="sr-only">Delete</span>
+                        </Button>
+                      </div>
+
+                      {progress[doc.id] && progress[doc.id].length > 0 && (
+                        <div className="mt-2 text-left">
+                          <Badge variant="outline" className="mb-1">
+                            Processing
+                          </Badge>
+                          <div className="text-xs text-muted-foreground max-h-24 overflow-y-auto border rounded p-2">
+                            {progress[doc.id].map((msg, idx) => (
+                              <div key={idx} className="mb-1">
+                                {msg}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deletingDocId !== null} onOpenChange={(open) => !open && setDeletingDocId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Document</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this document? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingDocId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Toaster />
     </div>
   )
 }

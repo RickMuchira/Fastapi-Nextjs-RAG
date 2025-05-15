@@ -1,0 +1,2558 @@
+=== layout.tsx ===
+import type React from "react"
+import type { Metadata } from "next"
+import { Geist, Geist_Mono } from "next/font/google"
+import "./globals.css"
+import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/sonner"
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+})
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+})
+
+export const metadata: Metadata = {
+  title: "EduRAG CMS",
+  description: "Educational Content Management System with RAG capabilities",
+}
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode
+}>) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          {children}
+          <Toaster />
+        </ThemeProvider>
+      </body>
+    </html>
+  )
+}
+
+=== page.tsx ===
+"use client"
+
+import { useState, useEffect } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { motion } from "framer-motion"
+import { FileText } from "lucide-react"
+import Navbar from "@/components/navbar"
+import BackgroundEffects from "@/components/background-effects"
+import CourseAccordion from "@/components/course-accordion"
+
+// API base URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function Home() {
+  const [courses, setCourses] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showEffects, setShowEffects] = useState(true)
+
+  // Fetch all courses with their nested data
+  const fetchCourses = async () => {
+    try {
+      setLoading(true)
+      const response = await axios.get(`${API_BASE_URL}/tree/`)
+      setCourses(response.data)
+    } catch (error) {
+      console.error("Error fetching courses:", error)
+      toast.error("Failed to load courses")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchCourses()
+  }, [])
+
+  // Create a new course
+  const handleCreateCourse = async (name: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/courses/`, { name })
+      toast.success(`Course "${name}" created successfully`)
+      fetchCourses()
+    } catch (error) {
+      console.error("Error creating course:", error)
+      toast.error("Failed to create course")
+    }
+  }
+
+  // Update a course
+  const handleUpdateCourse = async (id: number, name: string) => {
+    try {
+      await axios.put(`${API_BASE_URL}/courses/${id}`, { name })
+      toast.success(`Course updated successfully`)
+      fetchCourses()
+    } catch (error) {
+      console.error("Error updating course:", error)
+      toast.error("Failed to update course")
+    }
+  }
+
+  // Delete a course
+  const handleDeleteCourse = async (id: number) => {
+    try {
+      await axios.delete(`${API_BASE_URL}/courses/${id}`)
+      toast.success("Course deleted successfully")
+      fetchCourses()
+    } catch (error) {
+      console.error("Error deleting course:", error)
+      toast.error("Failed to delete course")
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      {showEffects && <BackgroundEffects />}
+
+      <Navbar onToggleEffects={() => setShowEffects(!showEffects)} />
+
+      <main className="p-6 flex-1 relative z-10">
+        <div className="max-w-6xl mx-auto">
+          <h1 className="text-3xl font-bold mb-6">EduRAG CMS Management</h1>
+
+          {loading ? (
+            <div className="flex justify-center items-center h-64">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+            </div>
+          ) : courses.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="bg-muted p-8 rounded-lg text-center"
+            >
+              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+              <h3 className="text-xl font-medium mb-2">No courses found</h3>
+              <p className="text-muted-foreground mb-4">Get started by creating your first course</p>
+            </motion.div>
+          ) : (
+            <CourseAccordion
+              courses={courses}
+              onCreateCourse={handleCreateCourse}
+              onUpdateCourse={handleUpdateCourse}
+              onDeleteCourse={handleDeleteCourse}
+              fetchCourses={fetchCourses}
+            />
+          )}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+=== utils.ts ===
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
+=== ask folder ===
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/app/ask/page.tsx
+"use client"
+
+import type React from "react"
+
+import { useState, useEffect, useRef } from "react"
+import axios from "axios"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
+import { PageHeader } from "@/components/layout/page-header"
+import {
+  MessageSquare,
+  Loader2,
+  Send,
+  User,
+  Bot,
+  Clock,
+  Bookmark,
+  BookmarkCheck,
+  RotateCcw,
+  Lightbulb,
+} from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { toast } from "sonner"
+import { Toaster } from "@/components/ui/sonner"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Badge } from "@/components/ui/badge"
+import { motion, AnimatePresence } from "framer-motion"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+
+interface Course {
+  id: number
+  name: string
+}
+interface Year {
+  id: number
+  name: string
+}
+interface Semester {
+  id: number
+  name: string
+}
+interface Unit {
+  id: number
+  name: string
+}
+
+interface ChatMessage {
+  id: string
+  type: "user" | "assistant"
+  content: string
+  timestamp: Date
+  saved?: boolean
+}
+
+interface ChatSession {
+  id: string
+  unitId: number
+  unitName: string
+  coursePath: string
+  messages: ChatMessage[]
+  timestamp: Date
+}
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+// Sample question suggestions
+const QUESTION_SUGGESTIONS = [
+  "Can you summarize the key concepts in this unit?",
+  "What are the main topics covered in this material?",
+  "Explain the relationship between the concepts in this unit",
+  "What are some practical applications of these concepts?",
+  "How does this unit connect to other parts of the course?",
+]
+
+export default function AskQuestionPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  const [courseId, setCourseId] = useState<string>("")
+  const [yearId, setYearId] = useState<string>("")
+  const [semesterId, setSemesterId] = useState<string>("")
+  const [unitId, setUnitId] = useState<string>("")
+  const [unitName, setUnitName] = useState<string>("")
+  const [coursePath, setCoursePath] = useState<string>("")
+
+  const [question, setQuestion] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState("new")
+
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Load courses
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const res = await axios.get(`${API}/courses/`)
+        setCourses(res.data)
+      } catch (err) {
+        toast.error("Failed to fetch courses")
+        console.error("Error fetching courses:", err)
+      }
+    }
+
+    fetchCourses()
+
+    // Load chat sessions from localStorage
+    const savedSessions = localStorage.getItem("chatSessions")
+    if (savedSessions) {
+      try {
+        const sessions = JSON.parse(savedSessions)
+        // Convert string timestamps back to Date objects
+        const parsedSessions = sessions.map((session: any) => ({
+          ...session,
+          timestamp: new Date(session.timestamp),
+          messages: session.messages.map((msg: any) => ({
+            ...msg,
+            timestamp: new Date(msg.timestamp),
+          })),
+        }))
+        setChatSessions(parsedSessions)
+      } catch (error) {
+        console.error("Error parsing saved chat sessions:", error)
+      }
+    }
+  }, [])
+
+  // Load years when course is selected
+  useEffect(() => {
+    if (!courseId) return
+
+    const fetchYears = async () => {
+      try {
+        const res = await axios.get(`${API}/courses/${courseId}/years/`)
+        setYears(res.data)
+      } catch (err) {
+        toast.error("Failed to fetch years")
+        console.error("Error fetching years:", err)
+      }
+    }
+
+    fetchYears()
+    setYearId("")
+    setSemesters([])
+    setSemesterId("")
+    setUnits([])
+    setUnitId("")
+    updateCoursePath()
+  }, [courseId])
+
+  // Load semesters when year is selected
+  useEffect(() => {
+    if (!yearId) return
+
+    const fetchSemesters = async () => {
+      try {
+        const res = await axios.get(`${API}/years/${yearId}/semesters/`)
+        setSemesters(res.data)
+      } catch (err) {
+        toast.error("Failed to fetch semesters")
+        console.error("Error fetching semesters:", err)
+      }
+    }
+
+    fetchSemesters()
+    setSemesterId("")
+    setUnits([])
+    setUnitId("")
+    updateCoursePath()
+  }, [yearId])
+
+  // Load units when semester is selected
+  useEffect(() => {
+    if (!semesterId) return
+
+    const fetchUnits = async () => {
+      try {
+        const res = await axios.get(`${API}/semesters/${semesterId}/units/`)
+        setUnits(res.data)
+      } catch (err) {
+        toast.error("Failed to fetch units")
+        console.error("Error fetching units:", err)
+      }
+    }
+
+    fetchUnits()
+    setUnitId("")
+    updateCoursePath()
+  }, [semesterId])
+
+  // Update unit name and course path when unit is selected
+  useEffect(() => {
+    if (!unitId) {
+      setUnitName("")
+      return
+    }
+
+    const selectedUnit = units.find((u) => u.id.toString() === unitId)
+    if (selectedUnit) {
+      setUnitName(selectedUnit.name)
+    }
+
+    updateCoursePath()
+  }, [unitId, units])
+
+  // Scroll to bottom of messages when new message is added
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [chatSessions, currentSessionId])
+
+  // Save chat sessions to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem("chatSessions", JSON.stringify(chatSessions))
+  }, [chatSessions])
+
+  const updateCoursePath = () => {
+    const course = courses.find((c) => c.id.toString() === courseId)
+    const year = years.find((y) => y.id.toString() === yearId)
+    const semester = semesters.find((s) => s.id.toString() === semesterId)
+
+    let path = ""
+    if (course) path += course.name
+    if (year) path += ` > ${year.name}`
+    if (semester) path += ` > ${semester.name}`
+
+    setCoursePath(path)
+  }
+
+  const getCurrentSession = () => {
+    if (!currentSessionId) return null
+    return chatSessions.find((session) => session.id === currentSessionId) || null
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!unitId) {
+      toast.error("Please select a unit")
+      return
+    }
+
+    if (!question.trim()) {
+      toast.error("Please enter a question")
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      // Create a new session or use the current one
+      let sessionId = currentSessionId
+      if (!sessionId || activeTab === "new") {
+        sessionId = Date.now().toString()
+        const newSession: ChatSession = {
+          id: sessionId,
+          unitId: Number.parseInt(unitId),
+          unitName,
+          coursePath,
+          messages: [],
+          timestamp: new Date(),
+        }
+        setChatSessions((prev) => [newSession, ...prev])
+        setCurrentSessionId(sessionId)
+        setActiveTab("chat")
+      }
+
+      // Add user message
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "user",
+        content: question.trim(),
+        timestamp: new Date(),
+      }
+
+      setChatSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? { ...session, messages: [...session.messages, userMessage] } : session,
+        ),
+      )
+
+      // Clear input
+      setQuestion("")
+
+      // Send request to API
+      const res = await axios.post(`${API}/ask`, {
+        unit_id: Number.parseInt(unitId),
+        question: userMessage.content,
+      })
+
+      // Add assistant message
+      const assistantMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "assistant",
+        content: res.data.answer,
+        timestamp: new Date(),
+      }
+
+      setChatSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? { ...session, messages: [...session.messages, assistantMessage] } : session,
+        ),
+      )
+    } catch (err) {
+      toast.error("Failed to get answer")
+      console.error("❌ Failed to get answer:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSaveMessage = (sessionId: string, messageId: string) => {
+    setChatSessions((prev) =>
+      prev.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              messages: session.messages.map((msg) => (msg.id === messageId ? { ...msg, saved: !msg.saved } : msg)),
+            }
+          : session,
+      ),
+    )
+  }
+
+  const handleDeleteSession = (sessionId: string) => {
+    setChatSessions((prev) => prev.filter((session) => session.id !== sessionId))
+    if (currentSessionId === sessionId) {
+      setCurrentSessionId(null)
+      setActiveTab("new")
+    }
+  }
+
+  const handleSelectSession = (sessionId: string) => {
+    setCurrentSessionId(sessionId)
+    setActiveTab("chat")
+
+    // Set the form fields based on the selected session
+    const session = chatSessions.find((s) => s.id === sessionId)
+    if (session) {
+      const unit = units.find((u) => u.id === session.unitId)
+      if (unit) {
+        setUnitId(unit.id.toString())
+      }
+    }
+  }
+
+  const handleUseQuestionSuggestion = (suggestion: string) => {
+    setQuestion(suggestion)
+  }
+
+  const formatTimestamp = (date: Date) => {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }).format(date)
+  }
+
+  const formatDate = (date: Date) => {
+    const now = new Date()
+    const yesterday = new Date(now)
+    yesterday.setDate(yesterday.getDate() - 1)
+
+    if (date.toDateString() === now.toDateString()) {
+      return "Today"
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return "Yesterday"
+    } else {
+      return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(date)
+    }
+  }
+
+  return (
+    <div className="container mx-auto">
+      <PageHeader
+        title="Ask a Question"
+        icon={<MessageSquare className="h-6 w-6" />}
+        description="Ask questions about your course content using our RAG system"
+      />
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        {/* Sidebar with chat history */}
+        <div className="md:col-span-1">
+          <Card className="h-[calc(100vh-200px)]">
+            <CardHeader>
+              <CardTitle className="text-lg">Chat History</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="h-[calc(100vh-280px)]">
+                {chatSessions.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-muted-foreground">
+                    <MessageSquare className="mx-auto h-8 w-8 mb-2 opacity-50" />
+                    <p>No chat history yet</p>
+                    <p className="text-sm">Your conversations will appear here</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1 px-1">
+                    {chatSessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className={`p-2 rounded-md cursor-pointer transition-colors ${
+                          currentSessionId === session.id && activeTab === "chat" ? "bg-muted" : "hover:bg-muted/50"
+                        }`}
+                        onClick={() => handleSelectSession(session.id)}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="truncate flex-1">
+                            <p className="font-medium truncate">{session.unitName}</p>
+                            <p className="text-xs text-muted-foreground truncate">{session.coursePath}</p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-50 hover:opacity-100"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteSession(session.id)
+                            }}
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span className="sr-only">Delete</span>
+                          </Button>
+                        </div>
+                        <div className="flex justify-between items-center mt-1">
+                          <p className="text-xs text-muted-foreground">
+                            {session.messages.length} message{session.messages.length !== 1 ? "s" : ""}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{formatDate(session.timestamp)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </CardContent>
+            <CardFooter className="border-t p-4">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setCurrentSessionId(null)
+                  setActiveTab("new")
+                }}
+              >
+                New Conversation
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+
+        {/* Main content */}
+        <div className="md:col-span-3">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="new">New Question</TabsTrigger>
+              <TabsTrigger value="chat" disabled={!currentSessionId}>
+                Chat
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="new">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Ask a New Question</CardTitle>
+                  <CardDescription>Select a course, year, semester, and unit to ask a question about</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="space-y-4">
+                      <Select value={courseId} onValueChange={setCourseId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select Course" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {courses.map((c) => (
+                            <SelectItem key={c.id} value={c.id.toString()}>
+                              {c.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {years.length > 0 && (
+                        <Select value={yearId} onValueChange={setYearId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select Year" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {years.map((y) => (
+                              <SelectItem key={y.id} value={y.id.toString()}>
+                                {y.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+
+                      {semesters.length > 0 && (
+                        <Select value={semesterId} onValueChange={setSemesterId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select Semester" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {semesters.map((s) => (
+                              <SelectItem key={s.id} value={s.id.toString()}>
+                                {s.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+
+                      {units.length > 0 && (
+                        <Select value={unitId} onValueChange={setUnitId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select Unit" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {units.map((u) => (
+                              <SelectItem key={u.id} value={u.id.toString()}>
+                                {u.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+
+                      <div>
+                        <Textarea
+                          placeholder="Type your question here..."
+                          value={question}
+                          onChange={(e) => setQuestion(e.target.value)}
+                          className="min-h-[120px]"
+                        />
+
+                        {/* Question suggestions */}
+                        <div className="mt-2">
+                          <p className="text-sm text-muted-foreground flex items-center mb-2">
+                            <Lightbulb className="h-3 w-3 mr-1" />
+                            Question suggestions:
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {QUESTION_SUGGESTIONS.map((suggestion, index) => (
+                              <Badge
+                                key={index}
+                                variant="outline"
+                                className="cursor-pointer hover:bg-muted"
+                                onClick={() => handleUseQuestionSuggestion(suggestion)}
+                              >
+                                {suggestion}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button type="submit" className="w-full" disabled={isLoading}>
+                        {isLoading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Processing...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="mr-2 h-4 w-4" />
+                            Ask Question
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </form>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="chat">
+              <Card className="h-[calc(100vh-200px)] flex flex-col">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <CardTitle>{getCurrentSession()?.unitName || "Chat"}</CardTitle>
+                      <CardDescription>{getCurrentSession()?.coursePath || ""}</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex-1 overflow-hidden">
+                  <ScrollArea className="h-[calc(100vh-350px)] pr-4">
+                    <div className="space-y-4">
+                      {getCurrentSession()?.messages.map((message) => (
+                        <AnimatePresence key={message.id} mode="popLayout">
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.3 }}
+                            className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}
+                          >
+                            <div
+                              className={`flex max-w-[80%] ${
+                                message.type === "user" ? "flex-row-reverse" : "flex-row"
+                              }`}
+                            >
+                              <div
+                                className={`flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full ${
+                                  message.type === "user" ? "bg-primary ml-2" : "bg-muted mr-2"
+                                }`}
+                              >
+                                {message.type === "user" ? (
+                                  <User className="h-4 w-4 text-primary-foreground" />
+                                ) : (
+                                  <Bot className="h-4 w-4" />
+                                )}
+                              </div>
+                              <div>
+                                <div
+                                  className={`rounded-lg p-4 ${
+                                    message.type === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                                  }`}
+                                >
+                                  <div className="prose prose-sm dark:prose-invert">
+                                    <p className="whitespace-pre-line">{message.content}</p>
+                                  </div>
+                                </div>
+                                <div
+                                  className={`mt-1 flex items-center text-xs text-muted-foreground ${
+                                    message.type === "user" ? "justify-end" : "justify-start"
+                                  }`}
+                                >
+                                  <Clock className="mr-1 h-3 w-3" />
+                                  <span>{formatTimestamp(message.timestamp)}</span>
+
+                                  {message.type === "assistant" && (
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 ml-1"
+                                            onClick={() => handleSaveMessage(getCurrentSession()!.id, message.id)}
+                                          >
+                                            {message.saved ? (
+                                              <BookmarkCheck className="h-3 w-3 text-primary" />
+                                            ) : (
+                                              <Bookmark className="h-3 w-3" />
+                                            )}
+                                            <span className="sr-only">{message.saved ? "Unsave" : "Save"} answer</span>
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>{message.saved ? "Unsave" : "Save"} this answer</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </motion.div>
+                        </AnimatePresence>
+                      ))}
+                      <div ref={messagesEndRef} />
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+                <CardFooter className="border-t pt-4">
+                  <form onSubmit={handleSubmit} className="flex w-full items-end gap-2">
+                    <Textarea
+                      placeholder="Type your message..."
+                      value={question}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      className="min-h-[80px]"
+                    />
+                    <Button type="submit" size="icon" disabled={isLoading}>
+                      {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      <span className="sr-only">Send message</span>
+                    </Button>
+                  </form>
+                </CardFooter>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </div>
+
+      <Toaster />
+    </div>
+  )
+}
+
+=== documents folder ===
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/app/documents/upload/page.tsx
+"use client"
+
+import type React from "react"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileUp, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
+import { PageHeader } from "@/components/layout/page-header"
+import { Progress } from "@/components/ui/progress"
+import { Toaster } from "@/components/ui/sonner"
+
+interface Course {
+  id: number
+  name: string
+}
+interface Year {
+  id: number
+  name: string
+}
+interface Semester {
+  id: number
+  name: string
+}
+interface Unit {
+  id: number
+  name: string
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function UploadDocumentPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("")
+  const [selectedYearId, setSelectedYearId] = useState<string>("")
+  const [selectedSemesterId, setSelectedSemesterId] = useState<string>("")
+  const [selectedUnitId, setSelectedUnitId] = useState<string>("")
+  const [file, setFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  // Load courses
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/courses/`)
+        setCourses(res.data)
+      } catch (error) {
+        toast.error("Failed to load courses")
+        console.error("Error loading courses:", error)
+      }
+    }
+
+    fetchCourses()
+  }, [])
+
+  // Load years when course is selected
+  useEffect(() => {
+    if (!selectedCourseId) return
+
+    const fetchYears = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/courses/${selectedCourseId}/years/`)
+        setYears(res.data)
+        setSemesters([])
+        setUnits([])
+        setSelectedYearId("")
+        setSelectedSemesterId("")
+        setSelectedUnitId("")
+      } catch (error) {
+        toast.error("Failed to load years")
+        console.error("Error loading years:", error)
+      }
+    }
+
+    fetchYears()
+  }, [selectedCourseId])
+
+  // Load semesters when year is selected
+  useEffect(() => {
+    if (!selectedYearId) return
+
+    const fetchSemesters = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/years/${selectedYearId}/semesters/`)
+        setSemesters(res.data)
+        setUnits([])
+        setSelectedSemesterId("")
+        setSelectedUnitId("")
+      } catch (error) {
+        toast.error("Failed to load semesters")
+        console.error("Error loading semesters:", error)
+      }
+    }
+
+    fetchSemesters()
+  }, [selectedYearId])
+
+  // Load units when semester is selected
+  useEffect(() => {
+    if (!selectedSemesterId) return
+
+    const fetchUnits = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/semesters/${selectedSemesterId}/units/`)
+        setUnits(res.data)
+        setSelectedUnitId("")
+      } catch (error) {
+        toast.error("Failed to load units")
+        console.error("Error loading units:", error)
+      }
+    }
+
+    fetchUnits()
+  }, [selectedSemesterId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!selectedUnitId) {
+      toast.error("Please select a unit")
+      return
+    }
+
+    if (!file) {
+      toast.error("Please select a file to upload")
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("unit_id", selectedUnitId)
+
+    setIsUploading(true)
+    setUploadProgress(0)
+
+    try {
+      // Simulate upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress((prev) => {
+          const newProgress = prev + Math.random() * 15
+          return newProgress > 90 ? 90 : newProgress
+        })
+      }, 300)
+
+      const res = await axios.post(`${API_BASE_URL}/documents/`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+
+      clearInterval(progressInterval)
+      setUploadProgress(100)
+
+      if (res.status === 200 || res.status === 201) {
+        toast.success("Document uploaded successfully")
+        setFile(null)
+
+        // Reset file input
+        const fileInput = document.getElementById("file-upload") as HTMLInputElement
+        if (fileInput) fileInput.value = ""
+      }
+    } catch (error) {
+      toast.error("Upload failed. Please try again.")
+      console.error("Upload failed:", error)
+    } finally {
+      setTimeout(() => {
+        setIsUploading(false)
+        setUploadProgress(0)
+      }, 1000)
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Upload Document"
+        icon={<FileUp className="h-6 w-6" />}
+        description="Upload documents to specific courses, years, semesters, and units"
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Document Upload</CardTitle>
+          <CardDescription>Select the course hierarchy and choose a file to upload</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-4">
+              <div className="grid gap-2">
+                <Label htmlFor="course">Course</Label>
+                <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+                  <SelectTrigger id="course">
+                    <SelectValue placeholder="Select a course" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {courses.map((course) => (
+                      <SelectItem key={course.id} value={course.id.toString()}>
+                        {course.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {years.length > 0 && (
+                <div className="grid gap-2">
+                  <Label htmlFor="year">Year</Label>
+                  <Select value={selectedYearId} onValueChange={setSelectedYearId}>
+                    <SelectTrigger id="year">
+                      <SelectValue placeholder="Select a year" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {years.map((year) => (
+                        <SelectItem key={year.id} value={year.id.toString()}>
+                          {year.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {semesters.length > 0 && (
+                <div className="grid gap-2">
+                  <Label htmlFor="semester">Semester</Label>
+                  <Select value={selectedSemesterId} onValueChange={setSelectedSemesterId}>
+                    <SelectTrigger id="semester">
+                      <SelectValue placeholder="Select a semester" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {semesters.map((semester) => (
+                        <SelectItem key={semester.id} value={semester.id.toString()}>
+                          {semester.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {units.length > 0 && (
+                <div className="grid gap-2">
+                  <Label htmlFor="unit">Unit</Label>
+                  <Select value={selectedUnitId} onValueChange={setSelectedUnitId}>
+                    <SelectTrigger id="unit">
+                      <SelectValue placeholder="Select a unit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {units.map((unit) => (
+                        <SelectItem key={unit.id} value={unit.id.toString()}>
+                          {unit.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                <Label htmlFor="file-upload">Document</Label>
+                <div className="border rounded-md p-2">
+                  <input
+                    id="file-upload"
+                    type="file"
+                    className="w-full"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    disabled={isUploading}
+                  />
+                </div>
+                {file && (
+                  <p className="text-sm text-muted-foreground">
+                    Selected file: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {isUploading && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Uploading...</span>
+                  <span className="text-sm font-medium">{Math.round(uploadProgress)}%</span>
+                </div>
+                <Progress value={uploadProgress} className="h-2" />
+              </div>
+            )}
+
+            <Button type="submit" className="w-full" disabled={isUploading}>
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <FileUp className="mr-2 h-4 w-4" />
+                  Upload Document
+                </>
+              )}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+      <Toaster />
+    </div>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/app/documents/page.tsx
+"use client"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileText, Download, Play, Trash2, Plus, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { PageHeader } from "@/components/layout/page-header"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Toaster } from "@/components/ui/sonner"
+import Link from "next/link"
+
+interface Document {
+  id: number
+  filename: string
+  filepath: string
+  course_path: string
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function DocumentListPage() {
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [progress, setProgress] = useState<Record<number, string[]>>({})
+  const [isLoading, setIsLoading] = useState(true)
+  const [processingDocId, setProcessingDocId] = useState<number | null>(null)
+  const [deletingDocId, setDeletingDocId] = useState<number | null>(null)
+
+  const fetchDocuments = async () => {
+    try {
+      setIsLoading(true)
+      const res = await axios.get(`${API_BASE_URL}/documents/`)
+      setDocuments(res.data)
+    } catch (error) {
+      toast.error("Failed to load documents")
+      console.error("Error loading documents:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchDocuments()
+  }, [])
+
+  const handleProcess = (docId: number) => {
+    setProcessingDocId(docId)
+    setProgress((prev) => ({ ...prev, [docId]: [] }))
+
+    const evtSource = new EventSource(`${API_BASE_URL}/documents/${docId}/process`)
+
+    evtSource.onmessage = (event) => {
+      setProgress((prev) => ({
+        ...prev,
+        [docId]: [...(prev[docId] || []), event.data],
+      }))
+    }
+
+    evtSource.onerror = () => {
+      evtSource.close()
+      setProcessingDocId(null)
+      toast.success("Document processing completed")
+      fetchDocuments()
+    }
+  }
+
+  const handleDelete = async () => {
+    if (deletingDocId === null) return
+
+    try {
+      await axios.delete(`${API_BASE_URL}/documents/${deletingDocId}`)
+      toast.success("Document deleted successfully")
+      fetchDocuments()
+      setDeletingDocId(null)
+    } catch (error) {
+      toast.error("Failed to delete document")
+      console.error("Error deleting document:", error)
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Documents"
+        icon={<FileText className="h-6 w-6" />}
+        description="Manage your uploaded documents"
+      />
+
+      <div className="flex justify-end mb-4">
+        <Button asChild>
+          <Link href="/documents/upload">
+            <Plus className="mr-2 h-4 w-4" />
+            Upload New Document
+          </Link>
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Uploaded Documents</CardTitle>
+          <CardDescription>View, process, and manage your uploaded documents</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex justify-center items-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : documents.length === 0 ? (
+            <div className="text-center py-8">
+              <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
+              <h3 className="mt-4 text-lg font-medium">No documents found</h3>
+              <p className="mt-2 text-sm text-muted-foreground">Upload your first document to get started</p>
+              <Button asChild className="mt-4">
+                <Link href="/documents/upload">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Upload Document
+                </Link>
+              </Button>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Filename</TableHead>
+                  <TableHead>Course Path</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {documents.map((doc) => (
+                  <TableRow key={doc.id}>
+                    <TableCell className="font-medium">{doc.filename}</TableCell>
+                    <TableCell>{doc.course_path}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" asChild>
+                          <a
+                            href={`${API_BASE_URL}/documents/download/${doc.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span className="sr-only">Download</span>
+                          </a>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleProcess(doc.id)}
+                          disabled={processingDocId === doc.id}
+                        >
+                          {processingDocId === doc.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">Process</span>
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setDeletingDocId(doc.id)}>
+                          <Trash2 className="h-4 w-4" />
+                          <span className="sr-only">Delete</span>
+                        </Button>
+                      </div>
+
+                      {progress[doc.id] && progress[doc.id].length > 0 && (
+                        <div className="mt-2 text-left">
+                          <Badge variant="outline" className="mb-1">
+                            Processing
+                          </Badge>
+                          <div className="text-xs text-muted-foreground max-h-24 overflow-y-auto border rounded p-2">
+                            {progress[doc.id].map((msg, idx) => (
+                              <div key={idx} className="mb-1">
+                                {msg}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deletingDocId !== null} onOpenChange={(open) => !open && setDeletingDocId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Document</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this document? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingDocId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Toaster />
+    </div>
+  )
+}
+
+=== components folder (excluding ui) ===
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/layout/page-header.tsx
+import type React from "react"
+
+interface PageHeaderProps {
+  title: string
+  description?: string
+  icon?: React.ReactNode
+}
+
+export function PageHeader({ title, description, icon }: PageHeaderProps) {
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-2">
+        {icon && <div className="text-muted-foreground">{icon}</div>}
+        <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
+      </div>
+      {description && <p className="mt-2 text-muted-foreground">{description}</p>}
+    </div>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/theme-provider.tsx
+"use client"
+import { ThemeProvider as NextThemesProvider } from "next-themes"
+import type { ThemeProviderProps } from "next-themes"
+
+export function ThemeProvider({ children, ...props }: ThemeProviderProps) {
+  return <NextThemesProvider {...props}>{children}</NextThemesProvider>
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/sparkles.tsx
+"use client"
+
+import { useRef, useEffect, useState } from "react"
+import { useTheme } from "next-themes"
+
+export const SparklesCore = ({
+  id,
+  background,
+  minSize,
+  maxSize,
+  particleDensity,
+  className,
+  particleColor,
+}: {
+  id: string
+  background?: string
+  minSize?: number
+  maxSize?: number
+  particleDensity?: number
+  className?: string
+  particleColor?: string
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [width, setWidth] = useState(0)
+  const [height, setHeight] = useState(0)
+  const [mouse, setMouse] = useState({ x: 0, y: 0 })
+  const { theme } = useTheme()
+
+  const particles = useRef<any[]>([])
+  const animationRef = useRef<number>()
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d")
+      if (ctx) {
+        const handleResize = () => {
+          if (canvasRef.current) {
+            const canvas = canvasRef.current
+            const rect = canvas.getBoundingClientRect()
+            setWidth(rect.width)
+            setHeight(rect.height)
+            canvas.width = rect.width
+            canvas.height = rect.height
+          }
+        }
+
+        const handleMouseMove = (e: MouseEvent) => {
+          if (canvasRef.current) {
+            const rect = canvasRef.current.getBoundingClientRect()
+            setMouse({
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top,
+            })
+          }
+        }
+
+        handleResize()
+        window.addEventListener("resize", handleResize)
+        window.addEventListener("mousemove", handleMouseMove)
+
+        return () => {
+          window.removeEventListener("resize", handleResize)
+          window.removeEventListener("mousemove", handleMouseMove)
+        }
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (width && height) {
+      particles.current = []
+      const particleCount = Math.floor((width * height) / (particleDensity || 10000))
+
+      for (let i = 0; i < particleCount; i++) {
+        particles.current.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          size: Math.random() * (maxSize || 3) + (minSize || 1),
+          speedX: Math.random() * 0.5 - 0.25,
+          speedY: Math.random() * 0.5 - 0.25,
+        })
+      }
+    }
+  }, [width, height, minSize, maxSize, particleDensity])
+
+  useEffect(() => {
+    if (canvasRef.current && width && height) {
+      const ctx = canvasRef.current.getContext("2d")
+      if (!ctx) return
+
+      const animate = () => {
+        ctx.clearRect(0, 0, width, height)
+
+        // Draw particles
+        particles.current.forEach((particle) => {
+          // Move particles
+          particle.x += particle.speedX
+          particle.y += particle.speedY
+
+          // Wrap around edges
+          if (particle.x > width) particle.x = 0
+          if (particle.x < 0) particle.x = width
+          if (particle.y > height) particle.y = 0
+          if (particle.y < 0) particle.y = height
+
+          // Calculate distance from mouse
+          const dx = mouse.x - particle.x
+          const dy = mouse.y - particle.y
+          const distance = Math.sqrt(dx * dx + dy * dy)
+
+          // Adjust particle based on mouse proximity
+          if (distance < 100) {
+            const angle = Math.atan2(dy, dx)
+            particle.x -= Math.cos(angle) * 0.5
+            particle.y -= Math.sin(angle) * 0.5
+          }
+
+          // Draw particle
+          ctx.beginPath()
+          ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2)
+          ctx.fillStyle = particleColor || (theme === "dark" ? "#ffffff" : "#000000")
+          ctx.globalAlpha = 0.2
+          ctx.fill()
+        })
+
+        animationRef.current = requestAnimationFrame(animate)
+      }
+
+      animate()
+
+      return () => {
+        if (animationRef.current) {
+          cancelAnimationFrame(animationRef.current)
+        }
+      }
+    }
+  }, [width, height, mouse, particleColor, theme])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      id={id}
+      className={className}
+      style={{
+        background: background || "transparent",
+      }}
+    />
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/course-accordion.tsx
+"use client"
+
+import type React from "react"
+
+import { useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { motion } from "framer-motion"
+import { Edit, Trash2, Plus, ChevronDown } from "lucide-react"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { IconButton } from "@/components/ui/icon-button"
+import YearAccordion from "@/components/year-accordion"
+
+// API base URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+interface CourseAccordionProps {
+  courses: any[]
+  onCreateCourse: (name: string) => Promise<void>
+  onUpdateCourse: (id: number, name: string) => Promise<void>
+  onDeleteCourse: (id: number) => Promise<void>
+  fetchCourses: () => Promise<void>
+}
+
+export default function CourseAccordion({
+  courses,
+  onCreateCourse,
+  onUpdateCourse,
+  onDeleteCourse,
+  fetchCourses,
+}: CourseAccordionProps) {
+  const [newCourseName, setNewCourseName] = useState("")
+  const [editingCourse, setEditingCourse] = useState<{ id: number; name: string } | null>(null)
+  const [deletingCourseId, setDeletingCourseId] = useState<number | null>(null)
+  const [expandedCourses, setExpandedCourses] = useState<string[]>([])
+
+  const handleCreateCourse = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newCourseName.trim()) return
+
+    await onCreateCourse(newCourseName)
+    setNewCourseName("")
+  }
+
+  const handleUpdateCourse = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingCourse || !editingCourse.name.trim()) return
+
+    await onUpdateCourse(editingCourse.id, editingCourse.name)
+    setEditingCourse(null)
+  }
+
+  const handleDeleteCourse = async () => {
+    if (deletingCourseId === null) return
+
+    await onDeleteCourse(deletingCourseId)
+    setDeletingCourseId(null)
+  }
+
+  // Create a new year
+  const handleCreateYear = async (courseId: number, name: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/courses/${courseId}/years/`, { name })
+      toast.success(`Year "${name}" created successfully`)
+      fetchCourses()
+    } catch (error) {
+      console.error("Error creating year:", error)
+      toast.error("Failed to create year")
+    }
+  }
+
+  return (
+    <>
+      <Accordion
+        type="multiple"
+        value={expandedCourses}
+        onValueChange={setExpandedCourses}
+        className="w-full space-y-4"
+      >
+        {courses.map((course) => (
+          <AccordionItem key={course.id} value={course.id.toString()} className="border rounded-lg overflow-hidden">
+            <AccordionTrigger className="px-4 py-3 hover:no-underline hover:bg-muted/50 group">
+              <div className="flex items-center justify-between w-full">
+                <span className="font-medium text-lg">{course.name}</span>
+                <div className="flex items-center gap-2">
+                  <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                </div>
+              </div>
+            </AccordionTrigger>
+            <div className="flex items-center gap-2 px-4 py-1 border-t">
+              <IconButton
+                onClick={() => setEditingCourse({ id: course.id, name: course.name })}
+                icon={<Edit className="h-4 w-4" />}
+                variant="ghost"
+                size="sm"
+                tooltip="Edit course"
+              />
+              <IconButton
+                onClick={() => setDeletingCourseId(course.id)}
+                icon={<Trash2 className="h-4 w-4" />}
+                variant="ghost"
+                size="sm"
+                tooltip="Delete course"
+              />
+            </div>
+            <AccordionContent className="pb-0">
+              <YearAccordion
+                courseId={course.id}
+                years={course.years || []}
+                onCreateYear={(name) => handleCreateYear(course.id, name)}
+                fetchCourses={fetchCourses}
+              />
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+
+      <motion.form
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mt-4 flex items-center gap-2 p-4 border rounded-lg"
+        onSubmit={handleCreateCourse}
+      >
+        <Input
+          placeholder="New course name"
+          value={newCourseName}
+          onChange={(e) => setNewCourseName(e.target.value)}
+          className="flex-1"
+        />
+        <Button type="submit" size="sm">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Course
+        </Button>
+      </motion.form>
+
+      {/* Edit Course Dialog */}
+      <Dialog open={!!editingCourse} onOpenChange={(open) => !open && setEditingCourse(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Course</DialogTitle>
+            <DialogDescription>Update the course name below.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateCourse}>
+            <Input
+              value={editingCourse?.name || ""}
+              onChange={(e) => setEditingCourse((prev) => (prev ? { ...prev, name: e.target.value } : null))}
+              className="my-4"
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingCourse(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Changes</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Course Dialog */}
+      <Dialog open={deletingCourseId !== null} onOpenChange={(open) => !open && setDeletingCourseId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Course</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this course? This action cannot be undone and will also delete all years,
+              semesters, and units associated with this course.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingCourseId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteCourse}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/unit-list.tsx
+"use client"
+
+import type React from "react"
+
+import { useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { motion, AnimatePresence } from "framer-motion"
+import { Edit, Trash2, Plus } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { IconButton } from "@/components/ui/icon-button"
+
+// API base URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+interface UnitListProps {
+  semesterId: number
+  units: any[]
+  fetchCourses: () => Promise<void>
+}
+
+export default function UnitList({ semesterId, units, fetchCourses }: UnitListProps) {
+  const [newUnitName, setNewUnitName] = useState("")
+  const [editingUnit, setEditingUnit] = useState<{ id: number; name: string } | null>(null)
+  const [deletingUnitId, setDeletingUnitId] = useState<number | null>(null)
+
+  const handleCreateUnit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newUnitName.trim()) return
+
+    try {
+      await axios.post(`${API_BASE_URL}/semesters/${semesterId}/units/`, { name: newUnitName })
+      toast.success(`Unit "${newUnitName}" created successfully`)
+      fetchCourses()
+      setNewUnitName("")
+    } catch (error) {
+      console.error("Error creating unit:", error)
+      toast.error("Failed to create unit")
+    }
+  }
+
+  const handleUpdateUnit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingUnit || !editingUnit.name.trim()) return
+
+    try {
+      await axios.put(`${API_BASE_URL}/units/${editingUnit.id}`, { name: editingUnit.name })
+      toast.success("Unit updated successfully")
+      fetchCourses()
+      setEditingUnit(null)
+    } catch (error) {
+      console.error("Error updating unit:", error)
+      toast.error("Failed to update unit")
+    }
+  }
+
+  const handleDeleteUnit = async () => {
+    if (deletingUnitId === null) return
+
+    try {
+      await axios.delete(`${API_BASE_URL}/units/${deletingUnitId}`)
+      toast.success("Unit deleted successfully")
+      fetchCourses()
+      setDeletingUnitId(null)
+    } catch (error) {
+      console.error("Error deleting unit:", error)
+      toast.error("Failed to delete unit")
+    }
+  }
+
+  return (
+    <>
+      <div className="space-y-2 px-3 pb-3">
+        <AnimatePresence>
+          {units.map((unit) => (
+            <motion.div
+              key={unit.id}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, height: 0 }}
+              className="flex items-center justify-between p-2 rounded border bg-background/80 group"
+            >
+              <span className="text-sm">{unit.name}</span>
+              <div className="flex items-center gap-1">
+                <IconButton
+                  onClick={() => setEditingUnit({ id: unit.id, name: unit.name })}
+                  icon={<Edit className="h-3 w-3" />}
+                  variant="ghost"
+                  size="xs"
+                  tooltip="Edit unit"
+                />
+                <IconButton
+                  onClick={() => setDeletingUnitId(unit.id)}
+                  icon={<Trash2 className="h-3 w-3" />}
+                  variant="ghost"
+                  size="xs"
+                  tooltip="Delete unit"
+                />
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
+        <motion.form
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-2"
+          onSubmit={handleCreateUnit}
+        >
+          <Input
+            placeholder="New unit name"
+            value={newUnitName}
+            onChange={(e) => setNewUnitName(e.target.value)}
+            className="flex-1 h-7 text-xs"
+            size="sm"
+          />
+          <Button type="submit" size="sm" variant="outline" className="h-7 text-xs">
+            <Plus className="h-3 w-3 mr-1" />
+            Add Unit
+          </Button>
+        </motion.form>
+      </div>
+
+      {/* Edit Unit Dialog */}
+      <Dialog open={!!editingUnit} onOpenChange={(open) => !open && setEditingUnit(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Unit</DialogTitle>
+            <DialogDescription>Update the unit name below.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateUnit}>
+            <Input
+              value={editingUnit?.name || ""}
+              onChange={(e) => setEditingUnit((prev) => (prev ? { ...prev, name: e.target.value } : null))}
+              className="my-4"
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingUnit(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Changes</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Unit Dialog */}
+      <Dialog open={deletingUnitId !== null} onOpenChange={(open) => !open && setDeletingUnitId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Unit</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this unit? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingUnitId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteUnit}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/year-accordion.tsx
+"use client"
+
+import type React from "react"
+
+import { useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { motion } from "framer-motion"
+import { Edit, Trash2, Plus, ChevronDown } from "lucide-react"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { IconButton } from "@/components/ui/icon-button"
+import SemesterAccordion from "@/components/semester-accordion"
+
+// API base URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+interface YearAccordionProps {
+  courseId: number
+  years: any[]
+  onCreateYear: (name: string) => Promise<void>
+  fetchCourses: () => Promise<void>
+}
+
+export default function YearAccordion({ courseId, years, onCreateYear, fetchCourses }: YearAccordionProps) {
+  const [newYearName, setNewYearName] = useState("")
+  const [editingYear, setEditingYear] = useState<{ id: number; name: string } | null>(null)
+  const [deletingYearId, setDeletingYearId] = useState<number | null>(null)
+  const [expandedYears, setExpandedYears] = useState<string[]>([])
+
+  const handleCreateYear = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newYearName.trim()) return
+
+    await onCreateYear(newYearName)
+    setNewYearName("")
+  }
+
+  const handleUpdateYear = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingYear || !editingYear.name.trim()) return
+
+    try {
+      await axios.put(`${API_BASE_URL}/years/${editingYear.id}`, { name: editingYear.name })
+      toast.success("Year updated successfully")
+      fetchCourses()
+      setEditingYear(null)
+    } catch (error) {
+      console.error("Error updating year:", error)
+      toast.error("Failed to update year")
+    }
+  }
+
+  const handleDeleteYear = async () => {
+    if (deletingYearId === null) return
+
+    try {
+      await axios.delete(`${API_BASE_URL}/years/${deletingYearId}`)
+      toast.success("Year deleted successfully")
+      fetchCourses()
+      setDeletingYearId(null)
+    } catch (error) {
+      console.error("Error deleting year:", error)
+      toast.error("Failed to delete year")
+    }
+  }
+
+  // Create a new semester
+  const handleCreateSemester = async (yearId: number, name: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/years/${yearId}/semesters/`, { name })
+      toast.success(`Semester "${name}" created successfully`)
+      fetchCourses()
+    } catch (error) {
+      console.error("Error creating semester:", error)
+      toast.error("Failed to create semester")
+    }
+  }
+
+  return (
+    <>
+      <Accordion
+        type="multiple"
+        value={expandedYears}
+        onValueChange={setExpandedYears}
+        className="w-full space-y-2 px-4 pb-4"
+      >
+        {years.map((year) => (
+          <AccordionItem key={year.id} value={year.id.toString()} className="border rounded-md overflow-hidden">
+            <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-muted/50 group">
+              <div className="flex items-center justify-between w-full">
+                <span className="font-medium">{year.name}</span>
+                <div className="flex items-center gap-2">
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                </div>
+              </div>
+            </AccordionTrigger>
+            <div className="flex items-center gap-2 px-3 py-1 border-t">
+              <IconButton
+                onClick={() => setEditingYear({ id: year.id, name: year.name })}
+                icon={<Edit className="h-3.5 w-3.5" />}
+                variant="ghost"
+                size="xs"
+                tooltip="Edit year"
+              />
+              <IconButton
+                onClick={() => setDeletingYearId(year.id)}
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                variant="ghost"
+                size="xs"
+                tooltip="Delete year"
+              />
+            </div>
+            <AccordionContent className="pb-0">
+              <SemesterAccordion
+                yearId={year.id}
+                semesters={year.semesters || []}
+                onCreateSemester={(name) => handleCreateSemester(year.id, name)}
+                fetchCourses={fetchCourses}
+              />
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+
+      <motion.form
+        initial={{ opacity: 0, y: 5 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mt-2 flex items-center gap-2 px-4 pb-4"
+        onSubmit={handleCreateYear}
+      >
+        <Input
+          placeholder="New year name"
+          value={newYearName}
+          onChange={(e) => setNewYearName(e.target.value)}
+          className="flex-1"
+          size="sm"
+        />
+        <Button type="submit" size="sm" variant="outline">
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add Year
+        </Button>
+      </motion.form>
+
+      {/* Edit Year Dialog */}
+      <Dialog open={!!editingYear} onOpenChange={(open) => !open && setEditingYear(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Year</DialogTitle>
+            <DialogDescription>Update the year name below.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateYear}>
+            <Input
+              value={editingYear?.name || ""}
+              onChange={(e) => setEditingYear((prev) => (prev ? { ...prev, name: e.target.value } : null))}
+              className="my-4"
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingYear(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Changes</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Year Dialog */}
+      <Dialog open={deletingYearId !== null} onOpenChange={(open) => !open && setDeletingYearId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Year</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this year? This action cannot be undone and will also delete all semesters
+              and units associated with this year.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingYearId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteYear}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/background-effects.tsx
+"use client"
+
+import { useEffect, useState } from "react"
+import { motion } from "framer-motion"
+import { FileText } from "lucide-react"
+import { SparklesCore } from "@/components/sparkles"
+
+export default function BackgroundEffects() {
+  return (
+    <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+      <SparklesCore
+        id="sparkles"
+        background="transparent"
+        minSize={0.6}
+        maxSize={1.4}
+        particleDensity={15}
+        className="w-full h-full"
+        particleColor="#888"
+      />
+      <FloatingPaper />
+    </div>
+  )
+}
+
+function FloatingPaper() {
+  const [papers, setPapers] = useState<{ id: number; x: number; y: number; rotation: number; scale: number }[]>([])
+
+  useEffect(() => {
+    // Create 10 random paper icons
+    const newPapers = Array.from({ length: 10 }, (_, i) => ({
+      id: i,
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      rotation: Math.random() * 360,
+      scale: 0.8 + Math.random() * 0.4,
+    }))
+
+    setPapers(newPapers)
+  }, [])
+
+  return (
+    <>
+      {papers.map((paper) => (
+        <motion.div
+          key={paper.id}
+          className="absolute text-muted-foreground/20"
+          style={{
+            left: `${paper.x}%`,
+            top: `${paper.y}%`,
+          }}
+          initial={{ rotate: paper.rotation, scale: paper.scale }}
+          animate={{
+            y: [0, -20, 0],
+            rotate: [paper.rotation, paper.rotation + 10, paper.rotation],
+          }}
+          transition={{
+            duration: 5 + Math.random() * 5,
+            repeat: Number.POSITIVE_INFINITY,
+            repeatType: "reverse",
+          }}
+          whileHover={{ scale: paper.scale * 1.2, opacity: 0.8 }}
+        >
+          <FileText size={24 + (paper.id % 3) * 8} />
+        </motion.div>
+      ))}
+    </>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/semester-accordion.tsx
+"use client"
+
+import type React from "react"
+
+import { useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { motion } from "framer-motion"
+import { Edit, Trash2, Plus, ChevronDown } from "lucide-react"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { IconButton } from "@/components/ui/icon-button"
+import UnitList from "@/components/unit-list"
+
+// API base URL
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+interface SemesterAccordionProps {
+  yearId: number
+  semesters: any[]
+  onCreateSemester: (name: string) => Promise<void>
+  fetchCourses: () => Promise<void>
+}
+
+export default function SemesterAccordion({
+  yearId,
+  semesters,
+  onCreateSemester,
+  fetchCourses,
+}: SemesterAccordionProps) {
+  const [newSemesterName, setNewSemesterName] = useState("")
+  const [editingSemester, setEditingSemester] = useState<{ id: number; name: string } | null>(null)
+  const [deletingSemesterId, setDeletingSemesterId] = useState<number | null>(null)
+  const [expandedSemesters, setExpandedSemesters] = useState<string[]>([])
+
+  const handleCreateSemester = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newSemesterName.trim()) return
+
+    await onCreateSemester(newSemesterName)
+    setNewSemesterName("")
+  }
+
+  const handleUpdateSemester = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingSemester || !editingSemester.name.trim()) return
+
+    try {
+      await axios.put(`${API_BASE_URL}/semesters/${editingSemester.id}`, { name: editingSemester.name })
+      toast.success("Semester updated successfully")
+      fetchCourses()
+      setEditingSemester(null)
+    } catch (error) {
+      console.error("Error updating semester:", error)
+      toast.error("Failed to update semester")
+    }
+  }
+
+  const handleDeleteSemester = async () => {
+    if (deletingSemesterId === null) return
+
+    try {
+      await axios.delete(`${API_BASE_URL}/semesters/${deletingSemesterId}`)
+      toast.success("Semester deleted successfully")
+      fetchCourses()
+      setDeletingSemesterId(null)
+    } catch (error) {
+      console.error("Error deleting semester:", error)
+      toast.error("Failed to delete semester")
+    }
+  }
+
+  return (
+    <>
+      <Accordion
+        type="multiple"
+        value={expandedSemesters}
+        onValueChange={setExpandedSemesters}
+        className="w-full space-y-2 px-3 pb-3"
+      >
+        {semesters.map((semester) => (
+          <AccordionItem key={semester.id} value={semester.id.toString()} className="border rounded-md overflow-hidden">
+            <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-muted/50 group">
+              <div className="flex items-center justify-between w-full">
+                <span className="font-medium text-sm">{semester.name}</span>
+                <div className="flex items-center gap-2">
+                  <ChevronDown className="h-3 w-3 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                </div>
+              </div>
+            </AccordionTrigger>
+            <div className="flex items-center gap-2 px-3 py-1 border-t">
+              <IconButton
+                onClick={() => setEditingSemester({ id: semester.id, name: semester.name })}
+                icon={<Edit className="h-3 w-3" />}
+                variant="ghost"
+                size="xs"
+                tooltip="Edit semester"
+              />
+              <IconButton
+                onClick={() => setDeletingSemesterId(semester.id)}
+                icon={<Trash2 className="h-3 w-3" />}
+                variant="ghost"
+                size="xs"
+                tooltip="Delete semester"
+              />
+            </div>
+            <AccordionContent className="pb-0">
+              <UnitList semesterId={semester.id} units={semester.units || []} fetchCourses={fetchCourses} />
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+
+      <motion.form
+        initial={{ opacity: 0, y: 5 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mt-2 flex items-center gap-2 px-3 pb-3"
+        onSubmit={handleCreateSemester}
+      >
+        <Input
+          placeholder="New semester name"
+          value={newSemesterName}
+          onChange={(e) => setNewSemesterName(e.target.value)}
+          className="flex-1 h-8 text-sm"
+          size="sm"
+        />
+        <Button type="submit" size="sm" variant="outline" className="h-8 text-xs">
+          <Plus className="h-3 w-3 mr-1" />
+          Add Semester
+        </Button>
+      </motion.form>
+
+      {/* Edit Semester Dialog */}
+      <Dialog open={!!editingSemester} onOpenChange={(open) => !open && setEditingSemester(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Semester</DialogTitle>
+            <DialogDescription>Update the semester name below.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateSemester}>
+            <Input
+              value={editingSemester?.name || ""}
+              onChange={(e) => setEditingSemester((prev) => (prev ? { ...prev, name: e.target.value } : null))}
+              className="my-4"
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingSemester(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Changes</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Semester Dialog */}
+      <Dialog open={deletingSemesterId !== null} onOpenChange={(open) => !open && setDeletingSemesterId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Semester</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this semester? This action cannot be undone and will also delete all units
+              associated with this semester.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingSemesterId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteSemester}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+>>> /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/src/components/navbar.tsx
+"use client"
+
+import { useState } from "react"
+import Link from "next/link"
+import { motion } from "framer-motion"
+import { Sun, Moon, User, LogOut, Settings, Menu } from "lucide-react"
+import { useTheme } from "next-themes"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+
+interface NavbarProps {
+  onToggleEffects: () => void
+}
+
+export default function Navbar({ onToggleEffects }: NavbarProps) {
+  const { theme, setTheme } = useTheme()
+  const [effectsEnabled, setEffectsEnabled] = useState(true)
+
+  const handleToggleEffects = () => {
+    setEffectsEnabled(!effectsEnabled)
+    onToggleEffects()
+  }
+
+  return (
+    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="container flex h-16 items-center justify-between">
+        <div className="flex items-center gap-2 md:gap-4">
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon" className="md:hidden">
+                <Menu className="h-5 w-5" />
+                <span className="sr-only">Toggle menu</span>
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="left">
+              <SheetHeader>
+                <SheetTitle>EduRAG CMS</SheetTitle>
+              </SheetHeader>
+              <nav className="flex flex-col gap-4 mt-4">
+                <Link href="/" className="text-sm font-medium hover:underline">
+                  Dashboard
+                </Link>
+                <Link href="/documents" className="text-sm font-medium hover:underline">
+                  Documents
+                </Link>
+                <Link href="/ask" className="text-sm font-medium hover:underline">
+                  Ask Questions
+                </Link>
+              </nav>
+            </SheetContent>
+          </Sheet>
+
+          <Link href="/" className="flex items-center gap-2">
+            <motion.div
+              initial={{ rotate: -10 }}
+              animate={{ rotate: 10 }}
+              transition={{ duration: 0.5, repeat: Number.POSITIVE_INFINITY, repeatType: "reverse" }}
+            >
+              <span role="img" aria-label="book" className="text-2xl">
+                📚
+              </span>
+            </motion.div>
+            <span className="hidden font-bold sm:inline-block">EduRAG</span>
+          </Link>
+
+          <nav className="hidden md:flex items-center gap-6 ml-6">
+            <Link href="/" className="text-sm font-medium hover:underline">
+              Dashboard
+            </Link>
+            <Link href="/documents" className="text-sm font-medium hover:underline">
+              Documents
+            </Link>
+            <Link href="/ask" className="text-sm font-medium hover:underline">
+              Ask Questions
+            </Link>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch id="effects-mode" checked={effectsEnabled} onCheckedChange={handleToggleEffects} />
+            <Label htmlFor="effects-mode" className="hidden sm:block">
+              Effects
+            </Label>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Toggle theme"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          >
+            <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+            <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+            <span className="sr-only">Toggle theme</span>
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src="/placeholder.svg?height=32&width=32" alt="User" />
+                  <AvatarFallback>U</AvatarFallback>
+                </Avatar>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>My Account</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <User className="mr-2 h-4 w-4" />
+                <span>Profile</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem>
+                <Settings className="mr-2 h-4 w-4" />
+                <span>Settings</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </header>
+  )
+}
+
