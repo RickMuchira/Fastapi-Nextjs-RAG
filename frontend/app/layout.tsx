@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "EduRAG CMS",
+  title: "RICKEduRAG CMS",
   description: "Educational Content Management System with RAG capabilities",
 }
 

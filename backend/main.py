@@ -54,7 +54,7 @@ os.makedirs(VECTOR_ROOT, exist_ok=True)
 
 # === Groq client (hard-coded key for testing) ===
 # ⚠️ Only do this in local dev – remove before sharing or deploying!
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 # === COURSE CRUD ===

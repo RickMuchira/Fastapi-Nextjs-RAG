@@ -1,0 +1,962 @@
+]633;E;find "/media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat" -type f -exec echo -e "\\n\\n===== File: {} =====\\n" \\\x3b -exec cat {} \\\x3b;a2afec2f-b39c-4eca-87d9-4ef2fb2e889c]633;C
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/question-suggestions.tsx =====
+
+"use client"
+
+import { motion } from "framer-motion"
+import { Lightbulb } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+
+interface QuestionSuggestionsProps {
+  onSelectSuggestion: (suggestion: string) => void
+}
+
+const SUGGESTIONS = [
+  "Can you summarize the key concepts in this unit?",
+  "What are the main topics covered in this material?",
+  "Explain the relationship between the concepts in this unit",
+  "What are some practical applications of these concepts?",
+  "How does this unit connect to other parts of the course?",
+  "What are the most important points to remember?",
+  "Can you provide examples to illustrate these concepts?",
+  "What are common misconceptions about this topic?",
+]
+
+export default function QuestionSuggestions({ onSelectSuggestion }: QuestionSuggestionsProps) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 text-sm text-gray-400">
+        <Lightbulb className="h-4 w-4" />
+        <span>Try asking:</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {SUGGESTIONS.map((suggestion, index) => (
+          <motion.div
+            key={index}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.1 }}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <Badge
+              variant="outline"
+              className="w-full p-3 h-auto text-left cursor-pointer border-white/20 hover:border-purple-500/50 hover:bg-purple-500/10 transition-all duration-200"
+              onClick={() => onSelectSuggestion(suggestion)}
+            >
+              {suggestion}
+            </Badge>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/unit-selector.tsx =====
+
+"use client"
+
+import { useState, useEffect } from "react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import type { Course, Year, Semester, Unit } from "@/types/chat"
+import axios from "axios"
+import { toast } from "sonner"
+
+interface UnitSelectorProps {
+  onUnitSelect: (unit: { unitId: number; unitName: string; coursePath: string } | null) => void
+  selectedUnit: { unitId: number; unitName: string; coursePath: string } | null
+}
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function UnitSelector({ onUnitSelect, selectedUnit }: UnitSelectorProps) {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [years, setYears] = useState<Year[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+
+  const [courseId, setCourseId] = useState<string>("")
+  const [yearId, setYearId] = useState<string>("")
+  const [semesterId, setSemesterId] = useState<string>("")
+  const [unitId, setUnitId] = useState<string>("")
+
+  // Load courses
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const res = await axios.get(`${API}/courses/`)
+        setCourses(res.data)
+      } catch (err) {
+        toast.error("Failed to fetch courses")
+      }
+    }
+    fetchCourses()
+  }, [])
+
+  // Load years when course is selected
+  useEffect(() => {
+    if (!courseId) return
+    const fetchYears = async () => {
+      try {
+        const res = await axios.get(`${API}/courses/${courseId}/years/`)
+        setYears(res.data)
+        setYearId("")
+        setSemesters([])
+        setSemesterId("")
+        setUnits([])
+        setUnitId("")
+        onUnitSelect(null)
+      } catch (err) {
+        toast.error("Failed to fetch years")
+      }
+    }
+    fetchYears()
+  }, [courseId, onUnitSelect])
+
+  // Load semesters when year is selected
+  useEffect(() => {
+    if (!yearId) return
+    const fetchSemesters = async () => {
+      try {
+        const res = await axios.get(`${API}/years/${yearId}/semesters/`)
+        setSemesters(res.data)
+        setSemesterId("")
+        setUnits([])
+        setUnitId("")
+        onUnitSelect(null)
+      } catch (err) {
+        toast.error("Failed to fetch semesters")
+      }
+    }
+    fetchSemesters()
+  }, [yearId, onUnitSelect])
+
+  // Load units when semester is selected
+  useEffect(() => {
+    if (!semesterId) return
+    const fetchUnits = async () => {
+      try {
+        const res = await axios.get(`${API}/semesters/${semesterId}/units/`)
+        setUnits(res.data)
+        setUnitId("")
+        onUnitSelect(null)
+      } catch (err) {
+        toast.error("Failed to fetch units")
+      }
+    }
+    fetchUnits()
+  }, [semesterId, onUnitSelect])
+
+  // Update selected unit when unit is selected
+  useEffect(() => {
+    if (!unitId) return
+    const selectedUnitData = units.find((u) => u.id.toString() === unitId)
+    const course = courses.find((c) => c.id.toString() === courseId)
+    const year = years.find((y) => y.id.toString() === yearId)
+    const semester = semesters.find((s) => s.id.toString() === semesterId)
+
+    if (selectedUnitData && course && year && semester) {
+      const coursePath = `${course.name} > ${year.name} > ${semester.name}`
+      onUnitSelect({
+        unitId: selectedUnitData.id,
+        unitName: selectedUnitData.name,
+        coursePath,
+      })
+    }
+  }, [unitId, units, courses, years, semesters, courseId, yearId, semesterId, onUnitSelect])
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <Select value={courseId} onValueChange={setCourseId}>
+        <SelectTrigger className="bg-white/5 border-white/20 text-white">
+          <SelectValue placeholder="Select Course" />
+        </SelectTrigger>
+        <SelectContent className="bg-gray-900 border-white/20">
+          {courses.map((course) => (
+            <SelectItem key={course.id} value={course.id.toString()}>
+              {course.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={yearId} onValueChange={setYearId} disabled={!courseId}>
+        <SelectTrigger className="bg-white/5 border-white/20 text-white disabled:opacity-50">
+          <SelectValue placeholder="Select Year" />
+        </SelectTrigger>
+        <SelectContent className="bg-gray-900 border-white/20">
+          {years.map((year) => (
+            <SelectItem key={year.id} value={year.id.toString()}>
+              {year.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={semesterId} onValueChange={setSemesterId} disabled={!yearId}>
+        <SelectTrigger className="bg-white/5 border-white/20 text-white disabled:opacity-50">
+          <SelectValue placeholder="Select Semester" />
+        </SelectTrigger>
+        <SelectContent className="bg-gray-900 border-white/20">
+          {semesters.map((semester) => (
+            <SelectItem key={semester.id} value={semester.id.toString()}>
+              {semester.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select value={unitId} onValueChange={setUnitId} disabled={!semesterId}>
+        <SelectTrigger className="bg-white/5 border-white/20 text-white disabled:opacity-50">
+          <SelectValue placeholder="Select Unit" />
+        </SelectTrigger>
+        <SelectContent className="bg-gray-900 border-white/20">
+          {units.map((unit) => (
+            <SelectItem key={unit.id} value={unit.id.toString()}>
+              {unit.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/chat-window.tsx =====
+
+"use client"
+
+import type React from "react"
+
+import { useState, useRef, useEffect } from "react"
+import { motion } from "framer-motion"
+import { Send, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import type { ChatSession, ChatMessage } from "@/types/chat"
+import MessageBubble from "@/components/chat/message-bubble"
+import TypingIndicator from "@/components/chat/typing-indicator"
+import UnitSelector from "@/components/chat/unit-selector"
+import QuestionSuggestions from "@/components/chat/question-suggestions"
+import axios from "axios"
+import { toast } from "sonner"
+
+interface ChatWindowProps {
+  currentSession: ChatSession | null
+  onCreateSession: (unitId: number, unitName: string, coursePath: string) => string
+  onAddMessage: (sessionId: string, message: ChatMessage) => void
+  onUpdateMessage: (sessionId: string, messageId: string, updates: Partial<ChatMessage>) => void
+}
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function ChatWindow({
+  currentSession,
+  onCreateSession,
+  onAddMessage,
+  onUpdateMessage,
+}: ChatWindowProps) {
+  const [question, setQuestion] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [selectedUnit, setSelectedUnit] = useState<{
+    unitId: number
+    unitName: string
+    coursePath: string
+  } | null>(null)
+
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [currentSession?.messages])
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto"
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
+    }
+  }, [question])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!selectedUnit) {
+      toast.error("Please select a unit")
+      return
+    }
+
+    if (!question.trim()) {
+      toast.error("Please enter a question")
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      // Create session if none exists or use current one
+      let sessionId = currentSession?.id
+      if (!sessionId) {
+        sessionId = onCreateSession(selectedUnit.unitId, selectedUnit.unitName, selectedUnit.coursePath)
+      }
+
+      // Add user message
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "user",
+        content: question.trim(),
+        timestamp: new Date(),
+      }
+
+      onAddMessage(sessionId, userMessage)
+
+      // Clear input
+      const currentQuestion = question.trim()
+      setQuestion("")
+
+      // Add streaming assistant message
+      const assistantMessageId = (Date.now() + 1).toString()
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        type: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+      }
+
+      onAddMessage(sessionId, assistantMessage)
+
+      // Send request to API
+      const res = await axios.post(`${API}/ask`, {
+        unit_id: selectedUnit.unitId,
+        question: currentQuestion,
+      })
+
+      // Update assistant message with response
+      onUpdateMessage(sessionId, assistantMessageId, {
+        content: res.data.answer,
+        isStreaming: false,
+      })
+    } catch (err) {
+      toast.error("Failed to get answer")
+      console.error("❌ Failed to get answer:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit(e)
+    }
+  }
+
+  const handleSaveMessage = (messageId: string) => {
+    if (!currentSession) return
+    const message = currentSession.messages.find((msg) => msg.id === messageId)
+    if (message) {
+      onUpdateMessage(currentSession.id, messageId, { saved: !message.saved })
+      toast.success(message.saved ? "Message unsaved" : "Message saved")
+    }
+  }
+
+  return (
+    <div className="flex-1 flex flex-col bg-black/20 backdrop-blur-sm">
+      {/* Chat Messages */}
+      <ScrollArea className="flex-1 p-4">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {!currentSession ? (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-12">
+              <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-8 border border-white/10">
+                <h1 className="text-3xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
+                  Ask a Question
+                </h1>
+                <p className="text-gray-400 mb-6">Select a unit and start asking questions about your course content</p>
+                <QuestionSuggestions onSelectSuggestion={setQuestion} />
+              </div>
+            </motion.div>
+          ) : (
+            <>
+              {/* Session Header */}
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-center py-4 border-b border-white/10 mb-4"
+              >
+                <h2 className="text-xl font-semibold text-white">{currentSession.unitName}</h2>
+                <p className="text-sm text-gray-400">{currentSession.coursePath}</p>
+              </motion.div>
+
+              {/* Messages */}
+              {currentSession.messages.map((message, index) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onSave={() => handleSaveMessage(message.id)}
+                  delay={index * 0.1}
+                />
+              ))}
+
+              {/* Typing Indicator */}
+              {isLoading && <TypingIndicator />}
+            </>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </ScrollArea>
+
+      {/* Input Area */}
+      <div className="border-t border-white/10 bg-black/40 backdrop-blur-sm">
+        <div className="max-w-4xl mx-auto p-4">
+          {/* Unit Selector */}
+          <div className="mb-4">
+            <UnitSelector onUnitSelect={setSelectedUnit} selectedUnit={selectedUnit} />
+          </div>
+
+          {/* Input Form */}
+          <form onSubmit={handleSubmit} className="flex gap-3 items-end">
+            <div className="flex-1">
+              <Textarea
+                ref={textareaRef}
+                placeholder="Ask a question about your course content..."
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading}
+                className="min-h-[60px] max-h-[200px] resize-none bg-white/5 border-white/20 text-white placeholder:text-gray-400 focus:border-purple-500 focus:ring-purple-500/20"
+                rows={1}
+              />
+            </div>
+            <Button
+              type="submit"
+              disabled={isLoading || !question.trim() || !selectedUnit}
+              className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 h-auto"
+            >
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </form>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/chat-sidebar.tsx =====
+
+"use client"
+
+import { useState } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { MessageSquare, Plus, Trash2, Calendar } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import type { ChatSession } from "@/types/chat"
+import { cn } from "@/lib/utils"
+
+interface ChatSidebarProps {
+  sessions: ChatSession[]
+  currentSessionId: string | null
+  onSelectSession: (sessionId: string) => void
+  onDeleteSession: (sessionId: string) => void
+  onNewSession: () => void
+}
+
+export default function ChatSidebar({
+  sessions,
+  currentSessionId,
+  onSelectSession,
+  onDeleteSession,
+  onNewSession,
+}: ChatSidebarProps) {
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
+
+  const formatDate = (date: Date) => {
+    const now = new Date()
+    const yesterday = new Date(now)
+    yesterday.setDate(yesterday.getDate() - 1)
+
+    if (date.toDateString() === now.toDateString()) {
+      return "Today"
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return "Yesterday"
+    } else {
+      return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+      }).format(date)
+    }
+  }
+
+  const getSessionPreview = (session: ChatSession) => {
+    const lastMessage = session.messages[session.messages.length - 1]
+    if (!lastMessage) return "New conversation"
+    return lastMessage.content.slice(0, 60) + (lastMessage.content.length > 60 ? "..." : "")
+  }
+
+  return (
+    <div className="w-64 bg-black/40 backdrop-blur-sm border-r border-white/10 flex flex-col">
+      {/* Header */}
+      <div className="p-4 border-b border-white/10">
+        <Button onClick={onNewSession} className="w-full bg-purple-600 hover:bg-purple-700 text-white justify-start">
+          <Plus className="h-4 w-4 mr-2" />
+          New Chat
+        </Button>
+      </div>
+
+      {/* Sessions List */}
+      <ScrollArea className="flex-1">
+        <div className="p-2 space-y-1">
+          <AnimatePresence>
+            {sessions.length === 0 ? (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 text-center text-gray-400">
+                <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No conversations yet</p>
+                <p className="text-xs">Start a new chat to begin</p>
+              </motion.div>
+            ) : (
+              sessions.map((session, index) => (
+                <motion.div
+                  key={session.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: -100 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={cn(
+                    "group relative p-3 rounded-lg cursor-pointer transition-all duration-200",
+                    currentSessionId === session.id
+                      ? "bg-purple-600/20 border border-purple-500/30"
+                      : "hover:bg-white/5 border border-transparent",
+                  )}
+                  onMouseEnter={() => setHoveredSessionId(session.id)}
+                  onMouseLeave={() => setHoveredSessionId(null)}
+                  onClick={() => onSelectSession(session.id)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-medium text-sm text-white truncate">{session.unitName}</h3>
+                      <p className="text-xs text-gray-400 truncate mt-1">{session.coursePath}</p>
+                      <p className="text-xs text-gray-500 mt-1 line-clamp-2">{getSessionPreview(session)}</p>
+                    </div>
+
+                    <div className="flex items-center gap-1 ml-2">
+                      <div className="flex items-center text-xs text-gray-500">
+                        <Calendar className="h-3 w-3 mr-1" />
+                        {formatDate(session.timestamp)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Delete Button */}
+                  <AnimatePresence>
+                    {hoveredSessionId === session.id && (
+                      <motion.button
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onDeleteSession(session.id)
+                        }}
+                        className="absolute top-2 right-2 p-1 rounded-md bg-red-600/20 hover:bg-red-600/40 text-red-400 hover:text-red-300 transition-colors"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </motion.button>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Message Count Badge */}
+                  {session.messages.length > 0 && (
+                    <div className="absolute bottom-2 right-2 bg-purple-600/30 text-purple-300 text-xs px-2 py-0.5 rounded-full">
+                      {session.messages.length}
+                    </div>
+                  )}
+                </motion.div>
+              ))
+            )}
+          </AnimatePresence>
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/typing-indicator.tsx =====
+
+"use client"
+
+import { motion } from "framer-motion"
+import { Bot } from "lucide-react"
+
+export default function TypingIndicator() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="flex gap-3 justify-start"
+    >
+      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-600/20 flex items-center justify-center">
+        <Bot className="h-4 w-4 text-purple-400" />
+      </div>
+
+      <div className="bg-white/10 backdrop-blur-sm border border-white/10 rounded-2xl px-4 py-3">
+        <div className="flex items-center gap-1">
+          <span className="text-sm text-gray-300">AI is thinking</span>
+          <div className="flex gap-1 ml-2">
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, delay: 0 }}
+              className="w-2 h-2 bg-purple-400 rounded-full"
+            />
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, delay: 0.2 }}
+              className="w-2 h-2 bg-purple-400 rounded-full"
+            />
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, delay: 0.4 }}
+              className="w-2 h-2 bg-purple-400 rounded-full"
+            />
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/chat/message-bubble.tsx =====
+
+"use client"
+
+import { motion } from "framer-motion"
+import { User, Bot, Clock, Bookmark, BookmarkCheck } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import type { ChatMessage } from "@/types/chat"
+import { cn } from "@/lib/utils"
+import ReactMarkdown from "react-markdown"
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
+
+interface MessageBubbleProps {
+  message: ChatMessage
+  onSave: () => void
+  delay?: number
+}
+
+export default function MessageBubble({ message, onSave, delay = 0 }: MessageBubbleProps) {
+  const formatTimestamp = (date: Date) => {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }).format(date)
+  }
+
+  const isUser = message.type === "user"
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.3, delay }}
+      className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}
+    >
+      {!isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-600/20 flex items-center justify-center">
+          <Bot className="h-4 w-4 text-purple-400" />
+        </div>
+      )}
+
+      <div className={cn("max-w-[80%] space-y-1", isUser && "order-first")}>
+        <motion.div
+          initial={{ scale: 0.9 }}
+          animate={{ scale: 1 }}
+          transition={{ duration: 0.2, delay: delay + 0.1 }}
+          className={cn(
+            "rounded-2xl px-4 py-3 shadow-lg",
+            isUser
+              ? "bg-purple-600 text-white ml-auto"
+              : "bg-white/10 backdrop-blur-sm border border-white/10 text-white",
+          )}
+        >
+          {isUser ? (
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          ) : (
+            <div className="prose prose-sm prose-invert max-w-none">
+              {message.isStreaming ? (
+                <div className="flex items-center gap-1">
+                  <span>Thinking</span>
+                  <div className="flex gap-1">
+                    <motion.div
+                      animate={{ scale: [1, 1.2, 1] }}
+                      transition={{ duration: 0.6, repeat: Number.POSITIVE_INFINITY, delay: 0 }}
+                      className="w-1 h-1 bg-purple-400 rounded-full"
+                    />
+                    <motion.div
+                      animate={{ scale: [1, 1.2, 1] }}
+                      transition={{ duration: 0.6, repeat: Number.POSITIVE_INFINITY, delay: 0.2 }}
+                      className="w-1 h-1 bg-purple-400 rounded-full"
+                    />
+                    <motion.div
+                      animate={{ scale: [1, 1.2, 1] }}
+                      transition={{ duration: 0.6, repeat: Number.POSITIVE_INFINITY, delay: 0.4 }}
+                      className="w-1 h-1 bg-purple-400 rounded-full"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <ReactMarkdown
+                  components={{
+                    code({ node, inline, className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || "")
+                      return !inline && match ? (
+                        <SyntaxHighlighter
+                          style={oneDark}
+                          language={match[1]}
+                          PreTag="div"
+                          className="rounded-lg"
+                          {...props}
+                        >
+                          {String(children).replace(/\n$/, "")}
+                        </SyntaxHighlighter>
+                      ) : (
+                        <code className="bg-white/10 px-1 py-0.5 rounded text-sm" {...props}>
+                          {children}
+                        </code>
+                      )
+                    },
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              )}
+            </div>
+          )}
+        </motion.div>
+
+        <div className={cn("flex items-center gap-2 text-xs text-gray-400", isUser ? "justify-end" : "justify-start")}>
+          <Clock className="h-3 w-3" />
+          <span>{formatTimestamp(message.timestamp)}</span>
+
+          {!isUser && !message.isStreaming && (
+            <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onSave}
+                className="h-6 w-6 p-0 text-gray-400 hover:text-purple-400"
+              >
+                {message.saved ? (
+                  <BookmarkCheck className="h-3 w-3 text-purple-400" />
+                ) : (
+                  <Bookmark className="h-3 w-3" />
+                )}
+              </Button>
+            </motion.div>
+          )}
+        </div>
+      </div>
+
+      {isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center">
+          <User className="h-4 w-4 text-white" />
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/ask/page.tsx =====
+
+"use client"
+
+import { useState, useEffect } from "react"
+import Navbar from "@/components/navbar"
+import { SparklesCore } from "@/components/sparkles"
+import ChatSidebar from "@/components/chat/chat-sidebar"
+import ChatWindow from "@/components/chat/chat-window"
+import type { ChatSession, ChatMessage } from "@/types/chat"
+import { toast } from "sonner"
+import { Toaster } from "sonner"
+
+export default function AskQuestionPage() {
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+
+  // Load chat sessions from localStorage on mount
+  useEffect(() => {
+    const savedSessions = localStorage.getItem("chatSessions")
+    if (savedSessions) {
+      try {
+        const sessions = JSON.parse(savedSessions)
+        const parsedSessions = sessions.map((session: any) => ({
+          ...session,
+          timestamp: new Date(session.timestamp),
+          messages: session.messages.map((msg: any) => ({
+            ...msg,
+            timestamp: new Date(msg.timestamp),
+          })),
+        }))
+        setChatSessions(parsedSessions)
+      } catch (error) {
+        console.error("Error parsing saved chat sessions:", error)
+      }
+    }
+  }, [])
+
+  // Save chat sessions to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem("chatSessions", JSON.stringify(chatSessions))
+  }, [chatSessions])
+
+  const getCurrentSession = () => {
+    if (!currentSessionId) return null
+    return chatSessions.find((session) => session.id === currentSessionId) || null
+  }
+
+  const createNewSession = (unitId: number, unitName: string, coursePath: string) => {
+    const sessionId = Date.now().toString()
+    const newSession: ChatSession = {
+      id: sessionId,
+      unitId,
+      unitName,
+      coursePath,
+      messages: [],
+      timestamp: new Date(),
+    }
+    setChatSessions((prev) => [newSession, ...prev])
+    setCurrentSessionId(sessionId)
+    return sessionId
+  }
+
+  const addMessage = (sessionId: string, message: ChatMessage) => {
+    setChatSessions((prev) =>
+      prev.map((session) =>
+        session.id === sessionId ? { ...session, messages: [...session.messages, message] } : session,
+      ),
+    )
+  }
+
+  const updateMessage = (sessionId: string, messageId: string, updates: Partial<ChatMessage>) => {
+    setChatSessions((prev) =>
+      prev.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              messages: session.messages.map((msg) => (msg.id === messageId ? { ...msg, ...updates } : msg)),
+            }
+          : session,
+      ),
+    )
+  }
+
+  const deleteSession = (sessionId: string) => {
+    setChatSessions((prev) => prev.filter((session) => session.id !== sessionId))
+    if (currentSessionId === sessionId) {
+      setCurrentSessionId(null)
+    }
+    toast.success("Chat session deleted")
+  }
+
+  const selectSession = (sessionId: string) => {
+    setCurrentSessionId(sessionId)
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black/[0.96] text-white antialiased relative overflow-hidden">
+      {/* Ambient background with moving particles */}
+      <div className="h-full w-full absolute inset-0 z-0">
+        <SparklesCore
+          id="tsparticlesfullpage"
+          background="transparent"
+          minSize={0.4}
+          maxSize={1.0}
+          particleDensity={50}
+          className="w-full h-full"
+          particleColor="#FFFFFF"
+        />
+      </div>
+
+      <div className="relative z-10 flex flex-col h-screen">
+        <Navbar />
+
+        <div className="flex flex-1 overflow-hidden">
+          <ChatSidebar
+            sessions={chatSessions}
+            currentSessionId={currentSessionId}
+            onSelectSession={selectSession}
+            onDeleteSession={deleteSession}
+            onNewSession={() => setCurrentSessionId(null)}
+          />
+
+          <ChatWindow
+            currentSession={getCurrentSession()}
+            onCreateSession={createNewSession}
+            onAddMessage={addMessage}
+            onUpdateMessage={updateMessage}
+          />
+        </div>
+      </div>
+
+      <Toaster />
+    </div>
+  )
+}
+
+
+===== File: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/frontend/types/chat.ts =====
+
+export interface ChatMessage {
+  id: string
+  type: "user" | "assistant"
+  content: string
+  timestamp: Date
+  saved?: boolean
+  isStreaming?: boolean
+}
+
+export interface ChatSession {
+  id: string
+  unitId: number
+  unitName: string
+  coursePath: string
+  messages: ChatMessage[]
+  timestamp: Date
+}
+
+export interface Course {
+  id: number
+  name: string
+}
+
+export interface Year {
+  id: number
+  name: string
+}
+
+export interface Semester {
+  id: number
+  name: string
+}
+
+export interface Unit {
+  id: number
+  name: string
+}
