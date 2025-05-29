@@ -16,13 +16,15 @@ interface MessageBubbleProps {
 }
 
 export default function MessageBubble({ message, onSave, delay = 0 }: MessageBubbleProps) {
-  const isUser = message.type === "user"
+  const formatTimestamp = (date: Date) => {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }).format(date)
+  }
 
-  const ts = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  }).format(message.timestamp)
+  const isUser = message.type === "user"
 
   return (
     <motion.div
@@ -31,14 +33,12 @@ export default function MessageBubble({ message, onSave, delay = 0 }: MessageBub
       transition={{ duration: 0.3, delay }}
       className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}
     >
-      {/* Avatar */}
       {!isUser && (
         <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-600/20 flex items-center justify-center">
           <Bot className="h-4 w-4 text-purple-400" />
         </div>
       )}
 
-      {/* Bubble */}
       <div className={cn("max-w-[80%] space-y-1", isUser && "order-first")}>
         <motion.div
           initial={{ scale: 0.9 }}
@@ -55,42 +55,52 @@ export default function MessageBubble({ message, onSave, delay = 0 }: MessageBub
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
             <div className="prose prose-sm prose-invert max-w-none">
-              <ReactMarkdown
-                components={{
-                  code({ inline, className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || "")
-                    return !inline && match ? (
-                      <SyntaxHighlighter
-                        style={oneDark}
-                        language={match[1]}
-                        PreTag="div"
-                        className="rounded-lg"
-                        {...props}
-                      >
-                        {String(children).replace(/\n$/, "")}
-                      </SyntaxHighlighter>
-                    ) : (
-                      <code className="bg-white/10 px-1 py-0.5 rounded text-sm" {...props}>
-                        {children}
-                      </code>
-                    )
-                  },
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
+              {message.isStreaming ? (
+                <div className="flex items-center gap-2">
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="whitespace-pre-wrap">
+                    {message.content}
+                  </motion.div>
+                  <motion.div
+                    animate={{ opacity: [0, 1, 0] }}
+                    transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY }}
+                    className="w-2 h-5 bg-purple-400 rounded-sm"
+                  />
+                </div>
+              ) : (
+                <ReactMarkdown
+                  components={{
+                    code({ node, inline, className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || "")
+                      return !inline && match ? (
+                        <SyntaxHighlighter
+                          style={oneDark}
+                          language={match[1]}
+                          PreTag="div"
+                          className="rounded-lg"
+                          {...props}
+                        >
+                          {String(children).replace(/\n$/, "")}
+                        </SyntaxHighlighter>
+                      ) : (
+                        <code className="bg-white/10 px-1 py-0.5 rounded text-sm" {...props}>
+                          {children}
+                        </code>
+                      )
+                    },
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              )}
             </div>
           )}
         </motion.div>
 
-        {/* Meta row */}
-        <div
-          className={cn("flex items-center gap-2 text-xs text-gray-400", isUser ? "justify-end" : "justify-start")}
-        >
+        <div className={cn("flex items-center gap-2 text-xs text-gray-400", isUser ? "justify-end" : "justify-start")}>
           <Clock className="h-3 w-3" />
-          <span>{ts}</span>
+          <span>{formatTimestamp(message.timestamp)}</span>
 
-          {!isUser && (
+          {!isUser && !message.isStreaming && (
             <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
               <Button
                 variant="ghost"

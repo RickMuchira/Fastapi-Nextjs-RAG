@@ -7,3 +7,5 @@ langchain
 sentence-transformers
 axios
 PyPDF2
+sse-starlette
+pyspellchecker

@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useRef, useEffect } from "react"
 import { motion } from "framer-motion"
 import { Send, Loader2 } from "lucide-react"
@@ -11,7 +13,6 @@ import MessageBubble from "@/components/chat/message-bubble"
 import TypingIndicator from "@/components/chat/typing-indicator"
 import UnitSelector from "@/components/chat/unit-selector"
 import QuestionSuggestions from "@/components/chat/question-suggestions"
-import axios from "axios"
 import { toast } from "sonner"
 
 interface ChatWindowProps {
@@ -40,11 +41,14 @@ export default function ChatWindow({
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  /* -------- Helpers -------- */
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
   }, [currentSession?.messages])
 
+  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
@@ -52,12 +56,14 @@ export default function ChatWindow({
     }
   }, [question])
 
-  /* -------- Submit handler -------- */
-  const askQuestion = async () => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
     if (!selectedUnit) {
       toast.error("Please select a unit")
       return
     }
+
     if (!question.trim()) {
       toast.error("Please enter a question")
       return
@@ -66,37 +72,99 @@ export default function ChatWindow({
     try {
       setIsLoading(true)
 
-      /* Ensure session exists */
+      // Create session if none exists or use current one
       let sessionId = currentSession?.id
       if (!sessionId) {
         sessionId = onCreateSession(selectedUnit.unitId, selectedUnit.unitName, selectedUnit.coursePath)
       }
 
-      /* 1️⃣  Add the user message */
-      const userMsg: ChatMessage = {
+      // Add user message
+      const userMessage: ChatMessage = {
         id: Date.now().toString(),
         type: "user",
         content: question.trim(),
         timestamp: new Date(),
       }
-      onAddMessage(sessionId, userMsg)
+
+      onAddMessage(sessionId, userMessage)
+
+      // Clear input
       const currentQuestion = question.trim()
       setQuestion("")
 
-      /* 2️⃣  Call the API */
-      const res = await axios.post(`${API}/ask`, {
-        unit_id: selectedUnit.unitId,
-        question: currentQuestion,
+      // Add streaming assistant message
+      const assistantMessageId = (Date.now() + 1).toString()
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        type: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+      }
+
+      onAddMessage(sessionId, assistantMessage)
+
+      // Start streaming response (handles JSON {"token": "..."} per chunk)
+      const response = await fetch(`${API}/ask/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          unit_id: selectedUnit.unitId,
+          question: currentQuestion,
+        }),
       })
 
-      /* 3️⃣  Add the assistant reply (after we have it) */
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: "assistant",
-        content: res.data.answer,
-        timestamp: new Date(),
+      if (!response.ok) {
+        throw new Error("Failed to get response")
       }
-      onAddMessage(sessionId, aiMsg)
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let accumulatedContent = ""
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          console.log("Chunk received:", chunk)
+          const lines = chunk.split("\n")
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6).trim()
+              if (!data) continue
+
+              if (data === "[DONE]") {
+                onUpdateMessage(sessionId, assistantMessageId, {
+                  isStreaming: false,
+                })
+                return
+              }
+
+              try {
+                const parsed = JSON.parse(data)
+                console.log("Parsed token:", parsed.token)
+                if (parsed.token) {
+                  accumulatedContent += parsed.token
+                  onUpdateMessage(sessionId, assistantMessageId, {
+                    content: accumulatedContent,
+                  })
+                }
+              } catch (e) {
+                console.warn("Invalid JSON chunk skipped:", data)
+              }
+            }
+          }
+        }
+      }
+
+      // Fallback: mark as complete if we exit the loop
+      onUpdateMessage(sessionId, assistantMessageId, {
+        isStreaming: false,
+      })
     } catch (err) {
       toast.error("Failed to get answer")
       console.error("❌ Failed to get answer:", err)
@@ -105,50 +173,40 @@ export default function ChatWindow({
     }
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    askQuestion()
-  }
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      askQuestion()
+      handleSubmit(e)
     }
   }
 
-  /* -------- Save toggle -------- */
-  const handleSaveMessage = (id: string) => {
+  const handleSaveMessage = (messageId: string) => {
     if (!currentSession) return
-    const msg = currentSession.messages.find((m) => m.id === id)
-    if (msg) {
-      onUpdateMessage(currentSession.id, id, { saved: !msg.saved })
-      toast.success(msg.saved ? "Message unsaved" : "Message saved")
+    const message = currentSession.messages.find((msg) => msg.id === messageId)
+    if (message) {
+      onUpdateMessage(currentSession.id, messageId, { saved: !message.saved })
+      toast.success(message.saved ? "Message unsaved" : "Message saved")
     }
   }
 
-  /* -------- Render -------- */
   return (
     <div className="flex-1 flex flex-col bg-black/20 backdrop-blur-sm">
-      {/* Messages */}
+      {/* Chat Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="max-w-4xl mx-auto space-y-4">
           {!currentSession ? (
-            /* Empty-state intro */
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-12">
               <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-8 border border-white/10">
                 <h1 className="text-3xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
                   Ask a Question
                 </h1>
-                <p className="text-gray-400 mb-6">
-                  Select a unit and start asking questions about your course content
-                </p>
+                <p className="text-gray-400 mb-6">Select a unit and start asking questions about your course content</p>
                 <QuestionSuggestions onSelectSuggestion={setQuestion} />
               </div>
             </motion.div>
           ) : (
             <>
-              {/* Header */}
+              {/* Session Header */}
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -158,27 +216,34 @@ export default function ChatWindow({
                 <p className="text-sm text-gray-400">{currentSession.coursePath}</p>
               </motion.div>
 
-              {/* All bubbles */}
-              {currentSession.messages.map((msg, i) => (
-                <MessageBubble key={msg.id} message={msg} onSave={() => handleSaveMessage(msg.id)} delay={i * 0.1} />
+              {/* Messages */}
+              {currentSession.messages.map((message, index) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onSave={() => handleSaveMessage(message.id)}
+                  delay={index * 0.1}
+                />
               ))}
 
-              {/* The ONE typing indicator */}
-              {isLoading && <TypingIndicator />}
+              {/* Typing Indicator - only show when loading but not streaming */}
+              {isLoading && !currentSession?.messages.some((msg) => msg.isStreaming) && <TypingIndicator show={true} />}
             </>
           )}
+
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 
-      {/* Input zone */}
+      {/* Input Area */}
       <div className="border-t border-white/10 bg-black/40 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto p-4">
-          {/* Unit dropdowns */}
+          {/* Unit Selector */}
           <div className="mb-4">
             <UnitSelector onUnitSelect={setSelectedUnit} selectedUnit={selectedUnit} />
           </div>
 
+          {/* Input Form */}
           <form onSubmit={handleSubmit} className="flex gap-3 items-end">
             <div className="flex-1">
               <Textarea
@@ -188,8 +253,8 @@ export default function ChatWindow({
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={isLoading}
-                rows={1}
                 className="min-h-[60px] max-h-[200px] resize-none bg-white/5 border-white/20 text-white placeholder:text-gray-400 focus:border-purple-500 focus:ring-purple-500/20"
+                rows={1}
               />
             </div>
             <Button
