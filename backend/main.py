@@ -6,15 +6,14 @@ import pickle
 import faiss
 import fitz  # PyMuPDF
 from datetime import datetime
-from typing import List, Generator, AsyncGenerator
+from typing import List, Generator, AsyncGenerator, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from sentence_transformers import SentenceTransformer
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from groq import Groq, AuthenticationError
 
 import json
@@ -24,6 +23,9 @@ import schemas
 import models
 from database import SessionLocal, engine
 from speller import SpellingCorrector  # Our custom speller module
+
+# Import the new splitter
+from chunker import split_document
 
 # -----------------------
 # Database setup
@@ -269,20 +271,26 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
 
     yield f"data: Processing {doc.filename}...\n\n"
     try:
-        with fitz.open(doc.filepath) as pdf:
-            text = "".join(page.get_text() for page in pdf)
+        # 1) Use outline-based (or fallback) splitter:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=500,
+            overlap=100,
+            fallback_chunk_size=400,
+            fallback_overlap=50
+        )
     except Exception as e:
-        yield f"data: Failed to read PDF: {e}\n\n"
+        yield f"data: Failed during splitting: {e}\n\n"
         return
 
-    if not text.strip():
-        yield "data: Document has no text.\n\n"
-        return
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = splitter.split_text(text)
     yield f"data: Split into {len(chunks)} chunks.\n\n"
 
+    if not chunks:
+        yield "data: No chunks generated.\n\n"
+        return
+
+    # 2) Embed and index each chunk
     embeddings = embedding_model.encode(chunks)
     unit_dir = os.path.join(VECTOR_ROOT, f"unit_{doc.unit_id}")
     os.makedirs(unit_dir, exist_ok=True)
@@ -313,6 +321,40 @@ def process_document(doc_id: int, db: Session = Depends(get_db)):
     return StreamingResponse(process_document_stream(doc_id, db), media_type="text/event-stream")
 
 # -----------------------
+# New: Return chunks + metadata for inspection
+# -----------------------
+@app.get("/documents/{doc_id}/chunks", response_model=List[Dict[str, Any]])
+def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
+    """
+    Return a list of all chunks (plus metadata) that our chunker produced for this document.
+    """
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    try:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=500,
+            overlap=100,
+            fallback_chunk_size=400,
+            fallback_overlap=50
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Error splitting document: {e}")
+
+    response = []
+    for meta, chunk_text in zip(metadata, chunks):
+        response.append({
+            "chunk_index": meta["chunk_index"],
+            "heading": meta["heading"],
+            "text": chunk_text,
+        })
+
+    return response
+
+# -----------------------
 # ASK Endpoint (non-streaming)
 # -----------------------
 @app.post("/ask")
@@ -341,7 +383,6 @@ def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
         idx_path = os.path.join(unit_dir, "index.faiss")
         map_path = os.path.join(unit_dir, "doc_id_map.pkl")
         if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-            # No vector store yet → return a friendly JSON
             return {"answer": "No vector store found for this unit. Please upload & process documents first."}
 
         index = faiss.read_index(idx_path)
@@ -426,7 +467,6 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
             idx_path = os.path.join(unit_dir, "index.faiss")
             map_path = os.path.join(unit_dir, "doc_id_map.pkl")
             if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-                # Stream a short human-readable message
                 msg = "No vector store found for this unit. Please upload & process documents first."
                 for i, word in enumerate(msg.split()):
                     token = word if i == 0 else f" {word}"

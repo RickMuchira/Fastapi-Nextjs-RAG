@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import axios from "axios"
 import { toast } from "sonner"
-import { FileText, Download, Play, Trash2, Plus, Loader2 } from "lucide-react"
+import { FileText, Download, Play, Trash2, Plus, Loader2, Eye } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { PageHeader } from "@/components/layout/page-header"
@@ -170,6 +170,7 @@ export default function DocumentListPage() {
                         <TableCell>{doc.course_path}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
+                            {/* Download */}
                             <Button
                               variant="outline"
                               size="sm"
@@ -185,6 +186,8 @@ export default function DocumentListPage() {
                                 <span className="sr-only">Download</span>
                               </a>
                             </Button>
+
+                            {/* Process */}
                             <Button
                               variant="outline"
                               size="sm"
@@ -199,6 +202,21 @@ export default function DocumentListPage() {
                               )}
                               <span className="sr-only">Process</span>
                             </Button>
+
+                            {/* View Chunks */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              asChild
+                              className="border-white/20 hover:bg-purple-500/20"
+                            >
+                              <Link href={`/documents/${doc.id}/chunks`}>
+                                <Eye className="h-4 w-4" />
+                                <span className="sr-only">View Chunks</span>
+                              </Link>
+                            </Button>
+
+                            {/* Delete */}
                             <Button
                               variant="outline"
                               size="sm"
