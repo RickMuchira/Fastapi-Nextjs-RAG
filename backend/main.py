@@ -1,6 +1,4 @@
-from dotenv import load_dotenv
-load_dotenv()  # Load env vars from .env file
-
+# main.py
 import os
 import re
 import traceback
@@ -18,7 +16,6 @@ from sqlalchemy.orm import Session
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from groq import Groq, AuthenticationError
-from spellchecker import SpellChecker
 
 import json
 import asyncio
@@ -26,8 +23,11 @@ import asyncio
 import schemas
 import models
 from database import SessionLocal, engine
+from speller import SpellingCorrector  # Our custom speller module
 
+# -----------------------
 # Database setup
+# -----------------------
 models.Base.metadata.create_all(bind=engine)
 def get_db():
     db = SessionLocal()
@@ -36,7 +36,9 @@ def get_db():
     finally:
         db.close()
 
+# -----------------------
 # FastAPI app + CORS
+# -----------------------
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +48,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------
 # Embedding model & storage dirs
+# -----------------------
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 EMBED_DIM = embedding_model.get_sentence_embedding_dimension()
 
@@ -55,32 +59,46 @@ VECTOR_ROOT = "shared_storage/vector_stores"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(VECTOR_ROOT, exist_ok=True)
 
-# Groq client (for local dev only)
+# -----------------------
+# Groq client (hardcoded API key)
+# -----------------------
 GROQ_API_KEY = "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"
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Normalize question utility
+# -----------------------
+# Initialize our speller
+# -----------------------
+corrector = SpellingCorrector()
+
+# -----------------------
+# Utility: normalize question
+# -----------------------
 def normalize_question(q: str) -> str:
     q = q.lower().strip()
     q = re.sub(r"[?.!]+$", "", q)  # remove trailing punctuation
     q = re.sub(r"\s+", " ", q)     # collapse whitespace
     return q
 
-# FAQ canonical answers dictionary
+# -----------------------
+# FAQ dictionary (exact keys) plus substring mapping
+# -----------------------
 FAQ_ANSWERS = {
     "what does the constitution say about sovereignty": (
         "According to the Constitution of Kenya, all sovereign power belongs to the people of Kenya "
         "and shall be exercised only in accordance with this Constitution. The people may exercise their "
         "sovereign power either directly or through their democratically elected representatives. The Constitution "
-        "is the supreme law of the land, and its provisions prevail over any conflicting laws. Although 'sovereignty' "
-        "is not always explicitly mentioned, these principles imply that sovereignty resides with the people and is "
-        "delegated to State organs according to the Constitution."
+        "is the supreme law of the land, and its provisions prevail over any conflicting laws."
     ),
-    # Add more canonical Q&A pairs here as needed
 }
 
-# --- CRUD Endpoints ---
+# For substring-based FAQs
+FAQ_SUBSTRINGS = {
+    "sovereignty": FAQ_ANSWERS["what does the constitution say about sovereignty"],
+}
 
+# -----------------------
+# CRUD Endpoints (unchanged)
+# -----------------------
 @app.post("/courses/", response_model=schemas.Course)
 def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db)):
     db_c = models.Course(name=course.name)
@@ -193,8 +211,9 @@ def create_unit(semester_id: int, unit: schemas.UnitCreate, db: Session = Depend
 def get_units(semester_id: int, db: Session = Depends(get_db)):
     return db.query(models.Unit).filter_by(semester_id=semester_id).all()
 
-# --- Document Upload & Management ---
-
+# -----------------------
+# Document Upload & Management
+# -----------------------
 @app.post("/documents/")
 def upload_document(
     unit_id: int = Form(...),
@@ -293,34 +312,43 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
 def process_document(doc_id: int, db: Session = Depends(get_db)):
     return StreamingResponse(process_document_stream(doc_id, db), media_type="text/event-stream")
 
-# --- ASK Endpoint with normalization and FAQ lookup ---
-
+# -----------------------
+# ASK Endpoint (non-streaming)
+# -----------------------
 @app.post("/ask")
 def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
     try:
         normalized_query = normalize_question(request.question)
 
+        # 1) Exact-match FAQ?
         if normalized_query in FAQ_ANSWERS:
             return {"answer": FAQ_ANSWERS[normalized_query]}
 
-        spell = SpellChecker()
-        corrected_words = [spell.correction(word) or word for word in normalized_query.split()]
-        corrected_query = " ".join(corrected_words)
+        # 2) Substring-match FAQ?
+        for substring, faq_ans in FAQ_SUBSTRINGS.items():
+            if substring in normalized_query:
+                return {"answer": faq_ans}
+
+        # 3) Spell-correct
+        corrected_query = corrector.correct_sentence(normalized_query)
 
         print(f"Original Query: {request.question}")
         print(f"Normalized Query: {normalized_query}")
         print(f"Corrected Query: {corrected_query}")
 
+        # 4) Load FAISS index & map
         unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
         idx_path = os.path.join(unit_dir, "index.faiss")
         map_path = os.path.join(unit_dir, "doc_id_map.pkl")
         if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-            raise HTTPException(404, "Vector store not found for this unit")
+            # No vector store yet → return a friendly JSON
+            return {"answer": "No vector store found for this unit. Please upload & process documents first."}
 
         index = faiss.read_index(idx_path)
         with open(map_path, "rb") as f:
             doc_map = pickle.load(f)
 
+        # 5) Use corrected_query for embedding/search
         question_embedding = embedding_model.encode([corrected_query])
         _, I = index.search(question_embedding, k=5)
         chunks = [doc_map[i]["text"] for i in I[0] if i in doc_map]
@@ -336,6 +364,7 @@ Question: {request.question}
 Answer:
 """
 
+        # 6) Call Groq
         completion = groq_client.chat.completions.create(
             model="llama3-70b-8192",
             messages=[
@@ -354,14 +383,16 @@ Answer:
         traceback.print_exc()
         raise HTTPException(500, str(e))
 
-# --- ASK Streaming Endpoint with normalization and FAQ lookup ---
-
+# -----------------------
+# ASK Streaming Endpoint
+# -----------------------
 @app.post("/ask/stream")
 async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends(get_db)):
     async def generate_streaming_response() -> AsyncGenerator[str, None]:
         try:
             normalized_query = normalize_question(request.question)
 
+            # 1) Exact-match FAQ?
             if normalized_query in FAQ_ANSWERS:
                 answer = FAQ_ANSWERS[normalized_query]
                 for i, word in enumerate(answer.split()):
@@ -372,25 +403,44 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
                 yield "data: [DONE]\n\n"
                 return
 
-            spell = SpellChecker()
-            corrected_words = [spell.correction(word) or word for word in normalized_query.split()]
-            corrected_query = " ".join(corrected_words)
+            # 2) Substring-match FAQ?
+            for substring, faq_ans in FAQ_SUBSTRINGS.items():
+                if substring in normalized_query:
+                    for i, word in enumerate(faq_ans.split()):
+                        token = word if i == 0 else f" {word}"
+                        data = json.dumps({"token": token})
+                        yield f"data: {data}\n\n"
+                        await asyncio.sleep(0.03)
+                    yield "data: [DONE]\n\n"
+                    return
+
+            # 3) Spell-correct
+            corrected_query = corrector.correct_sentence(normalized_query)
 
             print(f"Original Query: {request.question}")
             print(f"Normalized Query: {normalized_query}")
             print(f"Corrected Query: {corrected_query}")
 
+            # 4) Load FAISS index & map
             unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
             idx_path = os.path.join(unit_dir, "index.faiss")
             map_path = os.path.join(unit_dir, "doc_id_map.pkl")
             if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-                yield f"data: {json.dumps({'error': 'Vector store not found for this unit'})}\n\n"
+                # Stream a short human-readable message
+                msg = "No vector store found for this unit. Please upload & process documents first."
+                for i, word in enumerate(msg.split()):
+                    token = word if i == 0 else f" {word}"
+                    data = json.dumps({"token": token})
+                    yield f"data: {data}\n\n"
+                    await asyncio.sleep(0.03)
+                yield "data: [DONE]\n\n"
                 return
 
             index = faiss.read_index(idx_path)
             with open(map_path, "rb") as f:
                 doc_map = pickle.load(f)
 
+            # 5) Use corrected_query for embedding/search
             question_embedding = embedding_model.encode([corrected_query])
             _, I = index.search(question_embedding, k=5)
             chunks = [doc_map[i]["text"] for i in I[0] if i in doc_map]
@@ -406,6 +456,7 @@ Question: {request.question}
 Answer:
 """
 
+            # 6) Call Groq in streaming mode
             stream = groq_client.chat.completions.create(
                 model="llama3-70b-8192",
                 messages=[
@@ -417,6 +468,7 @@ Answer:
                 max_tokens=1000,
             )
 
+            # 7) Emit tokens exactly as before
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     token = chunk.choices[0].delta.content
@@ -427,9 +479,21 @@ Answer:
             yield "data: [DONE]\n\n"
 
         except AuthenticationError:
-            yield f"data: {json.dumps({'error': 'Groq authentication failed—check your API key'})}\n\n"
+            err = "Groq authentication failed—check your API key"
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            err = str(e)
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         generate_streaming_response(),
@@ -443,7 +507,9 @@ Answer:
         }
     )
 
-# --- ASK STREAMING SIMULATED (unchanged) ---
+# -----------------------
+# ASK Streaming Simulated Endpoint
+# -----------------------
 @app.post("/ask/stream-simulated")
 async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
     async def simulate_streaming_response() -> AsyncGenerator[str, None]:
@@ -452,17 +518,21 @@ async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session
             idx_path = os.path.join(unit_dir, "index.faiss")
             map_path = os.path.join(unit_dir, "doc_id_map.pkl")
             if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-                yield f"data: {json.dumps({'error': 'Vector store not found for this unit'})}\n\n"
+                msg = "No vector store found for this unit. Please upload & process documents first."
+                for i, word in enumerate(msg.split()):
+                    token = word if i == 0 else f" {word}"
+                    data = json.dumps({"token": token})
+                    yield f"data: {data}\n\n"
+                    await asyncio.sleep(0.03)
+                yield "data: [DONE]\n\n"
                 return
 
             index = faiss.read_index(idx_path)
             with open(map_path, "rb") as f:
                 doc_map = pickle.load(f)
 
-            spell = SpellChecker()
             original_query = request.question
-            corrected_words = [spell.correction(w) or w for w in original_query.split()]
-            corrected_query = " ".join(corrected_words)
+            corrected_query = corrector.correct_sentence(original_query)
             print(f"Original Query: {original_query}")
             print(f"Corrected Query: {corrected_query}")
 
@@ -500,9 +570,21 @@ Answer:
             yield "data: [DONE]\n\n"
 
         except AuthenticationError:
-            yield f"data: {json.dumps({'error': 'Groq authentication failed—check your API key'})}\n\n"
+            err = "Groq authentication failed—check your API key"
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            err = str(e)
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         simulate_streaming_response(),
@@ -516,7 +598,9 @@ Answer:
         }
     )
 
-# --- Course Tree endpoint unchanged ---
+# -----------------------
+# Course Tree endpoint (unchanged)
+# -----------------------
 @app.get("/tree/", response_model=List[schemas.Course])
 def get_course_tree(db: Session = Depends(get_db)):
     return db.query(models.Course).all()
