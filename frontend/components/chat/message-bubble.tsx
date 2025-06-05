@@ -96,6 +96,28 @@ export default function MessageBubble({ message, onSave, delay = 0 }: MessageBub
           )}
         </motion.div>
 
+        {/* --- Citations block for assistant responses --- */}
+        {!isUser && !message.isStreaming && message.citations && message.citations.length > 0 && (
+          <div className="mt-3 border-l-4 border-purple-400 pl-3 text-sm bg-purple-900/40 rounded-lg">
+            <div className="font-bold text-purple-300 mb-1">Sources:</div>
+            <ul className="list-disc list-inside space-y-1">
+              {message.citations.map((cit, idx) => {
+                const pageDisplay = Array.isArray(cit.pages)
+                  ? cit.pages.join(", ")
+                  : cit.pages ?? "N/A"
+                return (
+                  <li key={idx} className="text-purple-200">
+                    {cit.heading ? <span className="font-semibold">{cit.heading}</span> : null}
+                    {cit.heading && cit.pages ? " — " : ""}
+                    {cit.pages ? <span>Pages: {pageDisplay}</span> : null}
+                    {cit.file ? <span className="italic"> ({cit.file})</span> : null}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+
         <div className={cn("flex items-center gap-2 text-xs text-gray-400", isUser ? "justify-end" : "justify-start")}>
           <Clock className="h-3 w-3" />
           <span>{formatTimestamp(message.timestamp)}</span>

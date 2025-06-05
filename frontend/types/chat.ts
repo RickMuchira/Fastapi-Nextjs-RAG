@@ -1,3 +1,11 @@
+// /frontend/types/chat.ts
+
+export interface Citation {
+  heading?: string
+  pages?: number[] | null
+  file?: string
+}
+
 export interface ChatMessage {
   id: string
   type: "user" | "assistant"
@@ -5,6 +13,7 @@ export interface ChatMessage {
   timestamp: Date
   saved?: boolean
   isStreaming?: boolean
+  citations?: Citation[]     // <-- Updated to match back-end payload
 }
 
 export interface ChatSession {

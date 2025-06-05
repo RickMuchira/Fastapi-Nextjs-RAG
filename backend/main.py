@@ -1,4 +1,5 @@
 # main.py
+
 import os
 import re
 import traceback
@@ -8,7 +9,7 @@ import fitz  # PyMuPDF
 from datetime import datetime
 from typing import List, Generator, AsyncGenerator, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Path
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -24,7 +25,7 @@ import models
 from database import SessionLocal, engine
 from speller import SpellingCorrector  # Our custom speller module
 
-# Import the new splitter
+# Import the document‐splitting logic
 from chunker import split_document
 
 # -----------------------
@@ -44,7 +45,7 @@ def get_db():
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # adjust for your frontend domain
+    allow_origins=["http://localhost:3000"],  # adjust as needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,8 +57,8 @@ app.add_middleware(
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 EMBED_DIM = embedding_model.get_sentence_embedding_dimension()
 
-UPLOAD_DIR = "shared_storage/uploaded_files"
-VECTOR_ROOT = "shared_storage/vector_stores"
+UPLOAD_DIR   = "shared_storage/uploaded_files"
+VECTOR_ROOT  = "shared_storage/vector_stores"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(VECTOR_ROOT, exist_ok=True)
 
@@ -65,7 +66,7 @@ os.makedirs(VECTOR_ROOT, exist_ok=True)
 # Groq client (hardcoded API key)
 # -----------------------
 GROQ_API_KEY = "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"
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client  = Groq(api_key=GROQ_API_KEY)
 
 # -----------------------
 # Initialize our speller
@@ -76,27 +77,13 @@ corrector = SpellingCorrector()
 # Utility: normalize question
 # -----------------------
 def normalize_question(q: str) -> str:
+    """
+    Lowercases, trims whitespace, and removes trailing punctuation.
+    """
     q = q.lower().strip()
-    q = re.sub(r"[?.!]+$", "", q)  # remove trailing punctuation
-    q = re.sub(r"\s+", " ", q)     # collapse whitespace
+    q = re.sub(r"[?.!]+$", "", q)  # remove trailing ., ?, or !
+    q = re.sub(r"\s+", " ", q)     # collapse multiple spaces
     return q
-
-# -----------------------
-# FAQ dictionary (exact keys) plus substring mapping
-# -----------------------
-FAQ_ANSWERS = {
-    "what does the constitution say about sovereignty": (
-        "According to the Constitution of Kenya, all sovereign power belongs to the people of Kenya "
-        "and shall be exercised only in accordance with this Constitution. The people may exercise their "
-        "sovereign power either directly or through their democratically elected representatives. The Constitution "
-        "is the supreme law of the land, and its provisions prevail over any conflicting laws."
-    ),
-}
-
-# For substring-based FAQs
-FAQ_SUBSTRINGS = {
-    "sovereignty": FAQ_ANSWERS["what does the constitution say about sovereignty"],
-}
 
 # -----------------------
 # CRUD Endpoints (unchanged)
@@ -222,7 +209,7 @@ def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    ts       = datetime.now().strftime("%Y%m%d%H%M%S")
     filename = f"{ts}_{file.filename}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     with open(filepath, "wb") as f:
@@ -263,7 +250,16 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Document deleted"}
 
+# -----------------------
+# Process Document: Store heading, pages, source_file in metadata
+# -----------------------
 def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, None]:
+    """
+    Streaming generator that
+      1) Splits the PDF into chunks + metadata,
+      2) Embeds each chunk, indexes/flattens into a FAISS index,
+      3) Yields SSE lines so the front‐end can show progress.
+    """
     doc = db.query(models.Document).get(doc_id)
     if not doc:
         yield "data: Document not found\n\n"
@@ -271,7 +267,6 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
 
     yield f"data: Processing {doc.filename}...\n\n"
     try:
-        # 1) Use outline-based (or fallback) splitter:
         chunks, metadata = split_document(
             doc.filepath,
             filename=doc.filename,
@@ -290,25 +285,32 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
         yield "data: No chunks generated.\n\n"
         return
 
-    # 2) Embed and index each chunk
+    # Embed + index each chunk
     embeddings = embedding_model.encode(chunks)
-    unit_dir = os.path.join(VECTOR_ROOT, f"unit_{doc.unit_id}")
+    unit_dir   = os.path.join(VECTOR_ROOT, f"unit_{doc.unit_id}")
     os.makedirs(unit_dir, exist_ok=True)
 
     idx_path = os.path.join(unit_dir, "index.faiss")
     map_path = os.path.join(unit_dir, "doc_id_map.pkl")
+
     if os.path.exists(idx_path):
         index = faiss.read_index(idx_path)
         with open(map_path, "rb") as f:
             doc_map = pickle.load(f)
     else:
-        index = faiss.IndexFlatL2(EMBED_DIM)
+        index  = faiss.IndexFlatL2(EMBED_DIM)
         doc_map = {}
 
     base = index.ntotal
     index.add(embeddings)
-    for i, chunk in enumerate(chunks):
-        doc_map[base + i] = {"doc_id": doc.id, "text": chunk}
+    for i, chunk_text in enumerate(chunks):
+        doc_map[base + i] = {
+            "doc_id":     doc.id,
+            "text":       chunk_text,
+            "heading":    metadata[i].get("heading"),
+            "pages":      metadata[i].get("pages"),
+            "source_file": metadata[i].get("source_file")
+        }
 
     faiss.write_index(index, idx_path)
     with open(map_path, "wb") as f:
@@ -321,12 +323,13 @@ def process_document(doc_id: int, db: Session = Depends(get_db)):
     return StreamingResponse(process_document_stream(doc_id, db), media_type="text/event-stream")
 
 # -----------------------
-# New: Return chunks + metadata for inspection
+# Return chunks + metadata (inspection)
 # -----------------------
 @app.get("/documents/{doc_id}/chunks", response_model=List[Dict[str, Any]])
 def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
     """
-    Return a list of all chunks (plus metadata) that our chunker produced for this document.
+    Return all chunks + metadata for a given document,
+    so you can inspect headings/pages and verify chunking correctness.
     """
     doc = db.query(models.Document).get(doc_id)
     if not doc:
@@ -348,55 +351,47 @@ def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
     for meta, chunk_text in zip(metadata, chunks):
         response.append({
             "chunk_index": meta["chunk_index"],
-            "heading": meta["heading"],
-            "text": chunk_text,
+            "heading":     meta["heading"],
+            "text":        chunk_text,
+            "pages":       meta["pages"],
         })
 
     return response
 
 # -----------------------
-# ASK Endpoint (non-streaming)
+# ASK Endpoint (non‐streaming)
 # -----------------------
 @app.post("/ask")
 def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
     try:
         normalized_query = normalize_question(request.question)
 
-        # 1) Exact-match FAQ?
-        if normalized_query in FAQ_ANSWERS:
-            return {"answer": FAQ_ANSWERS[normalized_query]}
-
-        # 2) Substring-match FAQ?
-        for substring, faq_ans in FAQ_SUBSTRINGS.items():
-            if substring in normalized_query:
-                return {"answer": faq_ans}
-
-        # 3) Spell-correct
+        # Spell‐correct
         corrected_query = corrector.correct_sentence(normalized_query)
 
-        print(f"Original Query: {request.question}")
-        print(f"Normalized Query: {normalized_query}")
-        print(f"Corrected Query: {corrected_query}")
-
-        # 4) Load FAISS index & map
+        # Load FAISS index & doc_map for that unit
         unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
         idx_path = os.path.join(unit_dir, "index.faiss")
         map_path = os.path.join(unit_dir, "doc_id_map.pkl")
         if not (os.path.exists(idx_path) and os.path.exists(map_path)):
-            return {"answer": "No vector store found for this unit. Please upload & process documents first."}
+            return {
+                "answer": "No vector store found for this unit. Please upload & process documents first.",
+                "citations": []
+            }
 
         index = faiss.read_index(idx_path)
         with open(map_path, "rb") as f:
             doc_map = pickle.load(f)
 
-        # 5) Use corrected_query for embedding/search
+        # Search for top‐5 chunks
         question_embedding = embedding_model.encode([corrected_query])
         _, I = index.search(question_embedding, k=5)
-        chunks = [doc_map[i]["text"] for i in I[0] if i in doc_map]
+        top_indices = [i for i in I[0] if i in doc_map]
 
-        context = "\n".join(f"- {c}" for c in chunks)
+        # Build context for the LLM prompt
+        context = "\n".join(doc_map[i]["text"] for i in top_indices)
         prompt = f"""
-You are a helpful tutor. Based on the notes below, answer the student's question.
+You are a helpful tutor. Use the notes below to answer the student's question. Provide a clear, concise answer:
 
 Notes:
 {context}
@@ -405,16 +400,29 @@ Question: {request.question}
 Answer:
 """
 
-        # 6) Call Groq
         completion = groq_client.chat.completions.create(
             model="llama3-70b-8192",
             messages=[
                 {"role": "system", "content": "You are a helpful tutor."},
-                {"role": "user", "content": prompt}
+                {"role": "user",   "content": prompt}
             ]
         )
         answer = completion.choices[0].message.content.strip()
-        return {"answer": answer}
+
+        # Build minimal citations for the frontend
+        citations = [
+            {
+                "heading":   doc_map[i].get("heading"),
+                "pages":     doc_map[i].get("pages"),
+                "file":      doc_map[i].get("source_file"),
+            }
+            for i in top_indices
+        ]
+
+        return {
+            "answer": answer,
+            "citations": citations
+        }
 
     except AuthenticationError:
         raise HTTPException(502, "Groq authentication failed—check your API key")
@@ -424,6 +432,7 @@ Answer:
         traceback.print_exc()
         raise HTTPException(500, str(e))
 
+
 # -----------------------
 # ASK Streaming Endpoint
 # -----------------------
@@ -432,37 +441,9 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
     async def generate_streaming_response() -> AsyncGenerator[str, None]:
         try:
             normalized_query = normalize_question(request.question)
-
-            # 1) Exact-match FAQ?
-            if normalized_query in FAQ_ANSWERS:
-                answer = FAQ_ANSWERS[normalized_query]
-                for i, word in enumerate(answer.split()):
-                    token = word if i == 0 else f" {word}"
-                    data = json.dumps({"token": token})
-                    yield f"data: {data}\n\n"
-                    await asyncio.sleep(0.03)
-                yield "data: [DONE]\n\n"
-                return
-
-            # 2) Substring-match FAQ?
-            for substring, faq_ans in FAQ_SUBSTRINGS.items():
-                if substring in normalized_query:
-                    for i, word in enumerate(faq_ans.split()):
-                        token = word if i == 0 else f" {word}"
-                        data = json.dumps({"token": token})
-                        yield f"data: {data}\n\n"
-                        await asyncio.sleep(0.03)
-                    yield "data: [DONE]\n\n"
-                    return
-
-            # 3) Spell-correct
             corrected_query = corrector.correct_sentence(normalized_query)
 
-            print(f"Original Query: {request.question}")
-            print(f"Normalized Query: {normalized_query}")
-            print(f"Corrected Query: {corrected_query}")
-
-            # 4) Load FAISS index & map
+            # Load FAISS index & doc_map
             unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
             idx_path = os.path.join(unit_dir, "index.faiss")
             map_path = os.path.join(unit_dir, "doc_id_map.pkl")
@@ -473,6 +454,8 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
                     data = json.dumps({"token": token})
                     yield f"data: {data}\n\n"
                     await asyncio.sleep(0.03)
+                # Send empty citations array, then [DONE]
+                yield f"data: {json.dumps({'citations': []})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
@@ -480,14 +463,15 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
             with open(map_path, "rb") as f:
                 doc_map = pickle.load(f)
 
-            # 5) Use corrected_query for embedding/search
+            # Search top‐5 chunks
             question_embedding = embedding_model.encode([corrected_query])
             _, I = index.search(question_embedding, k=5)
-            chunks = [doc_map[i]["text"] for i in I[0] if i in doc_map]
+            top_indices = [i for i in I[0] if i in doc_map]
 
-            context = "\n".join(f"- {c}" for c in chunks)
+            # Build prompt context
+            context = "\n".join(doc_map[i]["text"] for i in top_indices)
             prompt = f"""
-You are a helpful tutor. Based on the notes below, answer the student's question.
+You are a helpful tutor. Use the notes below to answer the student's question. Provide a clear, concise answer:
 
 Notes:
 {context}
@@ -496,19 +480,19 @@ Question: {request.question}
 Answer:
 """
 
-            # 6) Call Groq in streaming mode
+            # Stream from Groq
             stream = groq_client.chat.completions.create(
                 model="llama3-70b-8192",
                 messages=[
                     {"role": "system", "content": "You are a helpful tutor."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user",   "content": prompt}
                 ],
                 stream=True,
                 temperature=0.7,
                 max_tokens=1000,
             )
 
-            # 7) Emit tokens exactly as before
+            # Emit tokens as SSE
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     token = chunk.choices[0].delta.content
@@ -516,6 +500,16 @@ Answer:
                     yield f"data: {data}\n\n"
                     await asyncio.sleep(0.01)
 
+            # At end, send the citations array
+            citations = [
+                {
+                    "heading":   doc_map[i].get("heading"),
+                    "pages":     doc_map[i].get("pages"),
+                    "file":      doc_map[i].get("source_file"),
+                }
+                for i in top_indices
+            ]
+            yield f"data: {json.dumps({'citations': citations})}\n\n"
             yield "data: [DONE]\n\n"
 
         except AuthenticationError:
@@ -525,7 +519,10 @@ Answer:
                 data = json.dumps({"token": token})
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0.03)
+            # End with no citations
+            yield f"data: {json.dumps({'citations': []})}\n\n"
             yield "data: [DONE]\n\n"
+
         except Exception as e:
             err = str(e)
             for i, word in enumerate(err.split()):
@@ -533,6 +530,7 @@ Answer:
                 data = json.dumps({"token": token})
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0.03)
+            yield f"data: {json.dumps({'citations': []})}\n\n"
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -547,8 +545,10 @@ Answer:
         }
     )
 
+
+
 # -----------------------
-# ASK Streaming Simulated Endpoint
+# (Optional) ask/stream‐simulated if you still want it
 # -----------------------
 @app.post("/ask/stream-simulated")
 async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
@@ -571,10 +571,8 @@ async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session
             with open(map_path, "rb") as f:
                 doc_map = pickle.load(f)
 
-            original_query = request.question
+            original_query  = request.question
             corrected_query = corrector.correct_sentence(original_query)
-            print(f"Original Query: {original_query}")
-            print(f"Corrected Query: {corrected_query}")
 
             question_embedding = embedding_model.encode([corrected_query])
             _, I = index.search(question_embedding, k=5)
@@ -595,7 +593,7 @@ Answer:
                 model="llama3-70b-8192",
                 messages=[
                     {"role": "system", "content": "You are a helpful tutor."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user",   "content": prompt}
                 ]
             )
             full_answer = completion.choices[0].message.content.strip()
@@ -617,6 +615,7 @@ Answer:
                 yield f"data: {data}\n\n"
                 await asyncio.sleep(0.03)
             yield "data: [DONE]\n\n"
+
         except Exception as e:
             err = str(e)
             for i, word in enumerate(err.split()):
@@ -637,6 +636,7 @@ Answer:
             "Access-Control-Allow-Headers": "Content-Type",
         }
     )
+
 
 # -----------------------
 # Course Tree endpoint (unchanged)

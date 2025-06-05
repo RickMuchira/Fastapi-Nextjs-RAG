@@ -2,8 +2,7 @@
 
 import fitz  # PyMuPDF
 import re
-from typing import List, Tuple, Dict
-
+from typing import List, Tuple, Dict, Optional
 
 def split_by_pdf_outline(
     pdf_path: str,
@@ -20,7 +19,7 @@ def split_by_pdf_outline(
 
     Returns:
       - final_chunks: List of chunk strings
-      - metadata_list: List of dicts {chunk_index, heading, source_file}
+      - metadata_list: List of dicts {chunk_index, heading, source_file, pages}
     """
     doc = fitz.open(pdf_path)
     toc = doc.get_toc()  # Each entry: [level, title, page_number]
@@ -32,7 +31,7 @@ def split_by_pdf_outline(
             start = pg - 1  # convert 1-based to 0-based page index
             if idx + 1 < len(toc):
                 _, _, next_pg = toc[idx + 1]
-                end = next_pg - 1
+                end = next_pg - 2  # end at the page before next section (0-based)
             else:
                 end = doc.page_count - 1
             sections.append((title, start, end))
@@ -53,6 +52,7 @@ def split_by_pdf_outline(
 
         words = section_text.split()
         total_words = len(words)
+        page_numbers = list(range(start_pg + 1, end_pg + 2))  # 1-based inclusive
 
         # 3a) If small enough, keep whole section
         if total_words <= max_words:
@@ -61,6 +61,7 @@ def split_by_pdf_outline(
                 "chunk_index": chunk_index,
                 "heading": heading,
                 "source_file": filename,
+                "pages": page_numbers,
             })
             chunk_index += 1
 
@@ -72,11 +73,19 @@ def split_by_pdf_outline(
                 sub_words = words[start_word:end_word]
                 sub_text = " ".join(sub_words)
 
+                # Calculate subchunk page range (approximate based on position)
+                # This is an approximation: assign subchunk to corresponding pages based on relative position in the section
+                words_per_page = max(1, total_words // len(page_numbers))
+                approx_start_pg_idx = (start_word // words_per_page)
+                approx_end_pg_idx = min((end_word - 1) // words_per_page, len(page_numbers) - 1)
+                sub_pages = list(range(page_numbers[approx_start_pg_idx], page_numbers[approx_end_pg_idx] + 1))
+
                 final_chunks.append(sub_text)
                 metadata_list.append({
                     "chunk_index": chunk_index,
                     "heading": heading,
                     "source_file": filename,
+                    "pages": sub_pages,
                 })
                 chunk_index += 1
 
@@ -141,6 +150,7 @@ def split_into_semantic_chunks(
                 "chunk_index": chunk_index,
                 "heading": heading or "No heading detected",
                 "source_file": filename,
+                "pages": None,  # Fallback does not know pages!
             })
             chunk_index += 1
 
@@ -156,6 +166,7 @@ def split_into_semantic_chunks(
                     "chunk_index": chunk_index,
                     "heading": heading or "No heading detected",
                     "source_file": filename,
+                    "pages": None,  # Fallback does not know pages!
                 })
                 chunk_index += 1
 

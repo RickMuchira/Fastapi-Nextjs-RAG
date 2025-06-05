@@ -1,7 +1,5 @@
 "use client"
 
-import type React from "react"
-
 import { useEffect, useState } from "react"
 import axios from "axios"
 import { toast } from "sonner"
@@ -17,31 +15,15 @@ import Navbar from "@/components/navbar"
 import { SparklesCore } from "@/components/sparkles"
 import { FloatingPaper } from "@/components/floating-paper"
 
-interface Course {
-  id: number
-  name: string
-}
-interface Year {
-  id: number
-  name: string
-}
-interface Semester {
-  id: number
-  name: string
-}
-interface Unit {
-  id: number
-  name: string
-}
+interface Unit { id: number; name: string }
+interface Semester { id: number; name: string; units: Unit[] }
+interface Year { id: number; name: string; semesters: Semester[] }
+interface Course { id: number; name: string; years: Year[] }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 
 export default function UploadDocumentPage() {
   const [courses, setCourses] = useState<Course[]>([])
-  const [years, setYears] = useState<Year[]>([])
-  const [semesters, setSemesters] = useState<Semester[]>([])
-  const [units, setUnits] = useState<Unit[]>([])
-
   const [selectedCourseId, setSelectedCourseId] = useState<string>("")
   const [selectedYearId, setSelectedYearId] = useState<string>("")
   const [selectedSemesterId, setSelectedSemesterId] = useState<string>("")
@@ -50,93 +32,36 @@ export default function UploadDocumentPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
 
-  // Load courses
-  useEffect(() => {
-    const fetchCourses = async () => {
-      try {
-        const res = await axios.get(`${API_BASE_URL}/courses/`)
-        setCourses(res.data)
-      } catch (error) {
-        toast.error("Failed to load courses")
-        console.error("Error loading courses:", error)
-      }
-    }
+  // Get the cascaded objects for selection
+  const selectedCourse = courses.find(c => c.id.toString() === selectedCourseId)
+  const years = selectedCourse?.years ?? []
+  const selectedYear = years.find(y => y.id.toString() === selectedYearId)
+  const semesters = selectedYear?.semesters ?? []
+  const selectedSemester = semesters.find(s => s.id.toString() === selectedSemesterId)
+  const units = selectedSemester?.units ?? []
 
-    fetchCourses()
+  useEffect(() => {
+    // Fetch all courses + nested
+    axios.get(`${API_BASE_URL}/courses/`)
+      .then(res => {
+        setCourses(res.data)
+        // console.log("Courses tree:", res.data)
+      })
+      .catch(err => {
+        toast.error("Failed to load courses")
+        console.error("Error loading courses:", err)
+      })
   }, [])
 
-  // Load years when course is selected
-  useEffect(() => {
-    if (!selectedCourseId) return
-
-    const fetchYears = async () => {
-      try {
-        const res = await axios.get(`${API_BASE_URL}/courses/${selectedCourseId}/years/`)
-        setYears(res.data)
-        setSemesters([])
-        setUnits([])
-        setSelectedYearId("")
-        setSelectedSemesterId("")
-        setSelectedUnitId("")
-      } catch (error) {
-        toast.error("Failed to load years")
-        console.error("Error loading years:", error)
-      }
-    }
-
-    fetchYears()
-  }, [selectedCourseId])
-
-  // Load semesters when year is selected
-  useEffect(() => {
-    if (!selectedYearId) return
-
-    const fetchSemesters = async () => {
-      try {
-        const res = await axios.get(`${API_BASE_URL}/years/${selectedYearId}/semesters/`)
-        setSemesters(res.data)
-        setUnits([])
-        setSelectedSemesterId("")
-        setSelectedUnitId("")
-      } catch (error) {
-        toast.error("Failed to load semesters")
-        console.error("Error loading semesters:", error)
-      }
-    }
-
-    fetchSemesters()
-  }, [selectedYearId])
-
-  // Load units when semester is selected
-  useEffect(() => {
-    if (!selectedSemesterId) return
-
-    const fetchUnits = async () => {
-      try {
-        const res = await axios.get(`${API_BASE_URL}/semesters/${selectedSemesterId}/units/`)
-        setUnits(res.data)
-        setSelectedUnitId("")
-      } catch (error) {
-        toast.error("Failed to load units")
-        console.error("Error loading units:", error)
-      }
-    }
-
-    fetchUnits()
-  }, [selectedSemesterId])
+  // Reset deeper selects when a parent is changed
+  useEffect(() => { setSelectedYearId(""); setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedCourseId])
+  useEffect(() => { setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedYearId])
+  useEffect(() => { setSelectedUnitId(""); }, [selectedSemesterId])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
-    if (!selectedUnitId) {
-      toast.error("Please select a unit")
-      return
-    }
-
-    if (!file) {
-      toast.error("Please select a file to upload")
-      return
-    }
+    if (!selectedUnitId) return toast.error("Please select a unit")
+    if (!file) return toast.error("Please select a file to upload")
 
     const formData = new FormData()
     formData.append("file", file)
@@ -144,28 +69,18 @@ export default function UploadDocumentPage() {
 
     setIsUploading(true)
     setUploadProgress(0)
-
     try {
-      // Simulate upload progress
       const progressInterval = setInterval(() => {
-        setUploadProgress((prev) => {
-          const newProgress = prev + Math.random() * 15
-          return newProgress > 90 ? 90 : newProgress
-        })
+        setUploadProgress(prev => (prev + Math.random() * 15 > 90 ? 90 : prev + Math.random() * 15))
       }, 300)
-
       const res = await axios.post(`${API_BASE_URL}/documents/`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       })
-
       clearInterval(progressInterval)
       setUploadProgress(100)
-
       if (res.status === 200 || res.status === 201) {
         toast.success("Document uploaded successfully")
         setFile(null)
-
-        // Reset file input
         const fileInput = document.getElementById("file-upload") as HTMLInputElement
         if (fileInput) fileInput.value = ""
       }
@@ -173,49 +88,26 @@ export default function UploadDocumentPage() {
       toast.error("Upload failed. Please try again.")
       console.error("Upload failed:", error)
     } finally {
-      setTimeout(() => {
-        setIsUploading(false)
-        setUploadProgress(0)
-      }, 1000)
+      setTimeout(() => { setIsUploading(false); setUploadProgress(0) }, 1000)
     }
   }
 
   return (
     <div className="min-h-screen flex flex-col bg-black/[0.96] text-white antialiased bg-grid-white/[0.02] relative overflow-hidden">
-      {/* Ambient background with moving particles */}
       <div className="h-full w-full absolute inset-0 z-0">
-        <SparklesCore
-          id="tsparticlesfullpage"
-          background="transparent"
-          minSize={0.6}
-          maxSize={1.4}
-          particleDensity={100}
-          className="w-full h-full"
-          particleColor="#FFFFFF"
-        />
+        <SparklesCore id="tsparticlesfullpage" background="transparent" minSize={0.6} maxSize={1.4} particleDensity={100} className="w-full h-full" particleColor="#FFFFFF" />
       </div>
-
-      {/* Floating papers background */}
       <div className="absolute inset-0 overflow-hidden z-0">
         <FloatingPaper count={4} />
       </div>
-
       <div className="relative z-10">
         <Navbar />
-
         <div className="container mx-auto p-6">
-          <PageHeader
-            title="Upload Document"
-            icon={<FileUp className="h-6 w-6" />}
-            description="Upload documents to specific courses, years, semesters, and units"
-          />
-
+          <PageHeader title="Upload Document" icon={<FileUp className="h-6 w-6" />} description="Upload documents to specific courses, years, semesters, and units" />
           <Card className="max-w-2xl mx-auto bg-white/5 backdrop-blur-sm border-white/10">
             <CardHeader>
               <CardTitle>Document Upload</CardTitle>
-              <CardDescription className="text-gray-400">
-                Select the course hierarchy and choose a file to upload
-              </CardDescription>
+              <CardDescription className="text-gray-400">Select the course hierarchy and choose a file to upload</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-6">
@@ -227,11 +119,13 @@ export default function UploadDocumentPage() {
                         <SelectValue placeholder="Select a course" />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-900 border-white/20">
-                        {courses.map((course) => (
-                          <SelectItem key={course.id} value={course.id.toString()}>
-                            {course.name}
-                          </SelectItem>
-                        ))}
+                        {courses.length === 0 ? (
+                          <div className="p-2 text-gray-400">No courses found</div>
+                        ) : (
+                          courses.map(course => (
+                            <SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
@@ -244,10 +138,8 @@ export default function UploadDocumentPage() {
                           <SelectValue placeholder="Select a year" />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-900 border-white/20">
-                          {years.map((year) => (
-                            <SelectItem key={year.id} value={year.id.toString()}>
-                              {year.name}
-                            </SelectItem>
+                          {years.map(year => (
+                            <SelectItem key={year.id} value={year.id.toString()}>{year.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -262,10 +154,8 @@ export default function UploadDocumentPage() {
                           <SelectValue placeholder="Select a semester" />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-900 border-white/20">
-                          {semesters.map((semester) => (
-                            <SelectItem key={semester.id} value={semester.id.toString()}>
-                              {semester.name}
-                            </SelectItem>
+                          {semesters.map(semester => (
+                            <SelectItem key={semester.id} value={semester.id.toString()}>{semester.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -280,10 +170,8 @@ export default function UploadDocumentPage() {
                           <SelectValue placeholder="Select a unit" />
                         </SelectTrigger>
                         <SelectContent className="bg-gray-900 border-white/20">
-                          {units.map((unit) => (
-                            <SelectItem key={unit.id} value={unit.id.toString()}>
-                              {unit.name}
-                            </SelectItem>
+                          {units.map(unit => (
+                            <SelectItem key={unit.id} value={unit.id.toString()}>{unit.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -293,18 +181,10 @@ export default function UploadDocumentPage() {
                   <div className="grid gap-2">
                     <Label htmlFor="file-upload">Document</Label>
                     <div className="border border-white/20 rounded-md p-2 bg-white/5">
-                      <input
-                        id="file-upload"
-                        type="file"
-                        className="w-full text-gray-400"
-                        onChange={(e) => setFile(e.target.files?.[0] || null)}
-                        disabled={isUploading}
-                      />
+                      <input id="file-upload" type="file" className="w-full text-gray-400" onChange={e => setFile(e.target.files?.[0] || null)} disabled={isUploading} />
                     </div>
                     {file && (
-                      <p className="text-sm text-gray-400">
-                        Selected file: {file.name} ({(file.size / 1024).toFixed(2)} KB)
-                      </p>
+                      <p className="text-sm text-gray-400">Selected file: {file.name} ({(file.size / 1024).toFixed(2)} KB)</p>
                     )}
                   </div>
                 </div>
@@ -319,11 +199,7 @@ export default function UploadDocumentPage() {
                   </div>
                 )}
 
-                <Button
-                  type="submit"
-                  className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                  disabled={isUploading}
-                >
+                <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white" disabled={isUploading}>
                   {isUploading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

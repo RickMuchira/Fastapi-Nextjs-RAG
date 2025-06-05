@@ -1,6 +1,6 @@
-"use client"
+// frontend/components/chat/chat-window.tsx
 
-import type React from "react"
+"use client"
 
 import { useState, useRef, useEffect } from "react"
 import { motion } from "framer-motion"
@@ -8,7 +8,7 @@ import { Send, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import type { ChatSession, ChatMessage } from "@/types/chat"
+import type { ChatSession, ChatMessage, Citation } from "@/types/chat"
 import MessageBubble from "@/components/chat/message-bubble"
 import TypingIndicator from "@/components/chat/typing-indicator"
 import UnitSelector from "@/components/chat/unit-selector"
@@ -100,11 +100,12 @@ export default function ChatWindow({
         content: "",
         timestamp: new Date(),
         isStreaming: true,
+        citations: [],  // Initialize citations as empty array
       }
 
       onAddMessage(sessionId, assistantMessage)
 
-      // Start streaming response (handles JSON {"token": "..."} per chunk)
+      // Start streaming response
       const response = await fetch(`${API}/ask/stream`, {
         method: "POST",
         headers: {
@@ -123,6 +124,7 @@ export default function ChatWindow({
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
       let accumulatedContent = ""
+      let citations: Citation[] = []
 
       if (reader) {
         while (true) {
@@ -130,7 +132,6 @@ export default function ChatWindow({
           if (done) break
 
           const chunk = decoder.decode(value, { stream: true })
-          console.log("Chunk received:", chunk)
           const lines = chunk.split("\n")
           for (const line of lines) {
             if (line.startsWith("data: ")) {
@@ -146,22 +147,28 @@ export default function ChatWindow({
 
               try {
                 const parsed = JSON.parse(data)
-                console.log("Parsed token:", parsed.token)
+                // Merge both content and citations if present
+                let updates: Partial<ChatMessage> = {}
                 if (parsed.token) {
                   accumulatedContent += parsed.token
-                  onUpdateMessage(sessionId, assistantMessageId, {
-                    content: accumulatedContent,
-                  })
+                  updates.content = accumulatedContent
+                }
+                if (parsed.citations) {
+                  citations = parsed.citations
+                  updates.citations = citations
+                }
+                if (Object.keys(updates).length > 0) {
+                  onUpdateMessage(sessionId, assistantMessageId, updates)
                 }
               } catch (e) {
-                console.warn("Invalid JSON chunk skipped:", data)
+                // Skip invalid JSON
               }
             }
           }
         }
       }
 
-      // Fallback: mark as complete if we exit the loop
+      // Fallback: mark as complete if loop ends without [DONE]
       onUpdateMessage(sessionId, assistantMessageId, {
         isStreaming: false,
       })
