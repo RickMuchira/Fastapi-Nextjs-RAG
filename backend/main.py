@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Generator, AsyncGenerator, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -357,7 +358,20 @@ def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
         })
 
     return response
-
+@app.get("/units/{unit_id}/documents/", response_model=List[schemas.DocumentWithPath])
+def get_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
+    docs = db.query(models.Document).filter(models.Document.unit_id == unit_id).all()
+    out = []
+    for doc in docs:
+        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        path = f"{c.name} → {y.name} → {s.name} → {u.name}"
+        out.append(schemas.DocumentWithPath(
+            id=doc.id,
+            filename=doc.filename,
+            filepath=doc.filepath,
+            course_path=path
+        ))
+    return out
 # -----------------------
 # ASK Endpoint (non‐streaming)
 # -----------------------
