@@ -26,7 +26,7 @@ import models
 from database import SessionLocal, engine
 from speller import SpellingCorrector  # Our custom speller module
 
-# Import the document‐splitting logic
+# Import the document-splitting logic
 from chunker import split_document
 
 # -----------------------
@@ -66,7 +66,7 @@ os.makedirs(VECTOR_ROOT, exist_ok=True)
 # -----------------------
 # Groq client (hardcoded API key)
 # -----------------------
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 groq_client  = Groq(api_key=GROQ_API_KEY)
 
 # -----------------------
@@ -259,7 +259,7 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
     Streaming generator that
       1) Splits the PDF into chunks + metadata,
       2) Embeds each chunk, indexes/flattens into a FAISS index,
-      3) Yields SSE lines so the front‐end can show progress.
+      3) Yields SSE lines so the front-end can show progress.
     """
     doc = db.query(models.Document).get(doc_id)
     if not doc:
@@ -272,9 +272,7 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
             doc.filepath,
             filename=doc.filename,
             max_words=500,
-            overlap=100,
-            fallback_chunk_size=400,
-            fallback_overlap=50
+            overlap=100
         )
     except Exception as e:
         yield f"data: Failed during splitting: {e}\n\n"
@@ -341,9 +339,7 @@ def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
             doc.filepath,
             filename=doc.filename,
             max_words=500,
-            overlap=100,
-            fallback_chunk_size=400,
-            fallback_overlap=50
+            overlap=100
         )
     except Exception as e:
         raise HTTPException(500, f"Error splitting document: {e}")
@@ -358,6 +354,7 @@ def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
         })
 
     return response
+
 @app.get("/units/{unit_id}/documents/", response_model=List[schemas.DocumentWithPath])
 def get_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
     docs = db.query(models.Document).filter(models.Document.unit_id == unit_id).all()
@@ -372,15 +369,16 @@ def get_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
             course_path=path
         ))
     return out
+
 # -----------------------
-# ASK Endpoint (non‐streaming)
+# ASK Endpoint (non-streaming)
 # -----------------------
 @app.post("/ask")
 def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
     try:
         normalized_query = normalize_question(request.question)
 
-        # Spell‐correct
+        # Spell-correct
         corrected_query = corrector.correct_sentence(normalized_query)
 
         # Load FAISS index & doc_map for that unit
@@ -397,7 +395,7 @@ def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
         with open(map_path, "rb") as f:
             doc_map = pickle.load(f)
 
-        # Search for top‐5 chunks
+        # Search for top-5 chunks
         question_embedding = embedding_model.encode([corrected_query])
         _, I = index.search(question_embedding, k=5)
         top_indices = [i for i in I[0] if i in doc_map]
@@ -423,7 +421,7 @@ Answer:
         )
         answer = completion.choices[0].message.content.strip()
 
-        # Build minimal citations for the frontend
+        # Build citations
         citations = [
             {
                 "heading":   doc_map[i].get("heading"),
@@ -433,9 +431,18 @@ Answer:
             for i in top_indices
         ]
 
+        # Remove exact duplicates while preserving order
+        seen = set()
+        unique_citations = []
+        for c in citations:
+            c_str = json.dumps(c, sort_keys=True)
+            if c_str not in seen:
+                seen.add(c_str)
+                unique_citations.append(c)
+
         return {
             "answer": answer,
-            "citations": citations
+            "citations": unique_citations
         }
 
     except AuthenticationError:
@@ -445,7 +452,6 @@ Answer:
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, str(e))
-
 
 # -----------------------
 # ASK Streaming Endpoint
@@ -477,7 +483,7 @@ async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends
             with open(map_path, "rb") as f:
                 doc_map = pickle.load(f)
 
-            # Search top‐5 chunks
+            # Search top-5 chunks
             question_embedding = embedding_model.encode([corrected_query])
             _, I = index.search(question_embedding, k=5)
             top_indices = [i for i in I[0] if i in doc_map]
@@ -514,7 +520,7 @@ Answer:
                     yield f"data: {data}\n\n"
                     await asyncio.sleep(0.01)
 
-            # At end, send the citations array
+            # Build citations
             citations = [
                 {
                     "heading":   doc_map[i].get("heading"),
@@ -523,7 +529,18 @@ Answer:
                 }
                 for i in top_indices
             ]
-            yield f"data: {json.dumps({'citations': citations})}\n\n"
+
+            # Remove exact duplicates while preserving order
+            seen = set()
+            unique_citations = []
+            for c in citations:
+                c_str = json.dumps(c, sort_keys=True)
+                if c_str not in seen:
+                    seen.add(c_str)
+                    unique_citations.append(c)
+
+            # At end, send the unique citations array
+            yield f"data: {json.dumps({'citations': unique_citations})}\n\n"
             yield "data: [DONE]\n\n"
 
         except AuthenticationError:
@@ -559,10 +576,8 @@ Answer:
         }
     )
 
-
-
 # -----------------------
-# (Optional) ask/stream‐simulated if you still want it
+# (Optional) ask/stream-simulated if you still want it
 # -----------------------
 @app.post("/ask/stream-simulated")
 async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
@@ -650,7 +665,6 @@ Answer:
             "Access-Control-Allow-Headers": "Content-Type",
         }
     )
-
 
 # -----------------------
 # Course Tree endpoint (unchanged)
