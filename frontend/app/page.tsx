@@ -4,12 +4,21 @@ import { useState, useEffect } from "react"
 import axios from "axios"
 import { toast } from "sonner"
 import { motion } from "framer-motion"
-import { FileText, Sparkles } from "lucide-react"
+import { FileText, Sparkles, Plus } from "lucide-react"
 import Navbar from "@/components/navbar"
 import CourseAccordion from "@/components/course-accordion"
 import { SparklesCore } from "@/components/sparkles"
 import { FloatingPaper } from "@/components/floating-paper"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import Link from "next/link"
 
 // API base URL
@@ -18,6 +27,9 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 export default function Home() {
   const [courses, setCourses] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [showCreateCourseDialog, setShowCreateCourseDialog] = useState(false)
+  const [newCourseNameInput, setNewCourseNameInput] = useState("")
+
 
   // Fetch all courses with their nested data
   const fetchCourses = async () => {
@@ -43,10 +55,21 @@ export default function Home() {
       await axios.post(`${API_BASE_URL}/courses/`, { name })
       toast.success(`Course "${name}" created successfully`)
       fetchCourses()
+      setNewCourseNameInput("") // Clear input after successful creation
+      setShowCreateCourseDialog(false) // Close dialog
     } catch (error) {
       console.error("Error creating course:", error)
       toast.error("Failed to create course")
     }
+  }
+
+  // Handle dialog submission for course creation
+  const handleDialogCreateCourse = () => {
+    if (!newCourseNameInput.trim()) {
+      toast.error("Please enter a course name")
+      return
+    }
+    handleCreateCourse(newCourseNameInput)
   }
 
   // Update a course
@@ -156,10 +179,26 @@ export default function Home() {
                 <FileText className="h-12 w-12 mx-auto mb-4 text-purple-400" />
                 <h3 className="text-xl font-medium mb-2">No courses found</h3>
                 <p className="text-gray-400 mb-4">Get started by creating your first course</p>
+                <Button
+                  onClick={() => setShowCreateCourseDialog(true)}
+                  className="mt-4 bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create New Course
+                </Button>
               </motion.div>
             ) : (
               <div className="bg-white/5 backdrop-blur-sm p-6 rounded-xl border border-white/10">
-                <h2 className="text-2xl font-bold mb-6">Course Management</h2>
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-2xl font-bold">Course Management</h2>
+                  <Button
+                    onClick={() => setShowCreateCourseDialog(true)}
+                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create New Course
+                  </Button>
+                </div>
                 <CourseAccordion
                   courses={courses}
                   onCreateCourse={handleCreateCourse}
@@ -172,6 +211,43 @@ export default function Home() {
           </div>
         </main>
       </div>
+
+      {/* Create Course Dialog */}
+      <Dialog open={showCreateCourseDialog} onOpenChange={setShowCreateCourseDialog}>
+        <DialogContent className="bg-gray-900 border-white/10 text-white">
+          <DialogHeader>
+            <DialogTitle>Create New Course</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Enter the name for your new course.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              placeholder="Course name"
+              value={newCourseNameInput}
+              onChange={(e) => setNewCourseNameInput(e.target.value)}
+              className="bg-white/5 border-white/20 text-white"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowCreateCourseDialog(false)}
+              className="border-white/20 hover:bg-white/10 text-white"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              onClick={handleDialogCreateCourse}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

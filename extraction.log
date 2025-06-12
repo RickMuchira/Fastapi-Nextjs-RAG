@@ -1,0 +1,9 @@
+🚀 Starting extraction at Thu 12 Jun 2025 04:39:37 PM EAT
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/main.py
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/chunker.py
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/database.py
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/models.py
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/schemas.py
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/upload/page.tsx
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/ask/page.tsx
+✅ Extracted: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/layout/page-header.tsx

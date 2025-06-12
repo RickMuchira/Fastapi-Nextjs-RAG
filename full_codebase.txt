@@ -1,0 +1,1662 @@
+🚀 FULL CODEBASE EXTRACTION - Thu 12 Jun 2025 04:43:06 PM EAT
+📁 Base Directory: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG
+
+
+████████████████████████████████████████
+███████████ BACKEND CODE ███████████
+████████████████████████████████████████
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Main Application
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/main.py
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;28;03m# main.py[39;00m
+
+[38;5;18;01mimport[39;00m[38;5;250m [39mos
+[38;5;18;01mimport[39;00m[38;5;250m [39mre
+[38;5;18;01mimport[39;00m[38;5;250m [39mtraceback
+[38;5;18;01mimport[39;00m[38;5;250m [39mpickle
+[38;5;18;01mimport[39;00m[38;5;250m [39mfaiss
+[38;5;18;01mimport[39;00m[38;5;250m [39mfitz  [38;5;28;03m# PyMuPDF[39;00m
+[38;5;18;01mfrom[39;00m[38;5;250m [39mdatetime[38;5;250m [39m[38;5;18;01mimport[39;00m datetime
+[38;5;18;01mfrom[39;00m[38;5;250m [39mtyping[38;5;250m [39m[38;5;18;01mimport[39;00m List, Generator, AsyncGenerator, Dict, Any
+
+[38;5;18;01mfrom[39;00m[38;5;250m [39mfastapi[38;5;250m [39m[38;5;18;01mimport[39;00m FastAPI, Depends, HTTPException, UploadFile, File, Form
+[38;5;18;01mfrom[39;00m[38;5;250m [39mfastapi[38;5;250m [39m[38;5;18;01mimport[39;00m Path
+[38;5;18;01mfrom[39;00m[38;5;250m [39mfastapi.middleware.cors[38;5;250m [39m[38;5;18;01mimport[39;00m CORSMiddleware
+[38;5;18;01mfrom[39;00m[38;5;250m [39mfastapi.responses[38;5;250m [39m[38;5;18;01mimport[39;00m FileResponse, StreamingResponse
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy.orm[38;5;250m [39m[38;5;18;01mimport[39;00m Session
+
+[38;5;18;01mfrom[39;00m[38;5;250m [39msentence_transformers[38;5;250m [39m[38;5;18;01mimport[39;00m SentenceTransformer
+[38;5;18;01mfrom[39;00m[38;5;250m [39mgroq[38;5;250m [39m[38;5;18;01mimport[39;00m Groq, AuthenticationError
+
+[38;5;18;01mimport[39;00m[38;5;250m [39mjson
+[38;5;18;01mimport[39;00m[38;5;250m [39masyncio
+
+[38;5;18;01mimport[39;00m[38;5;250m [39mschemas
+[38;5;18;01mimport[39;00m[38;5;250m [39mmodels
+[38;5;18;01mfrom[39;00m[38;5;250m [39mdatabase[38;5;250m [39m[38;5;18;01mimport[39;00m SessionLocal, engine
+[38;5;18;01mfrom[39;00m[38;5;250m [39mspeller[38;5;250m [39m[38;5;18;01mimport[39;00m SpellingCorrector  [38;5;28;03m# Our custom speller module[39;00m
+
+[38;5;28;03m# Import the document-splitting logic[39;00m
+[38;5;18;01mfrom[39;00m[38;5;250m [39mchunker[38;5;250m [39m[38;5;18;01mimport[39;00m split_document
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Database setup[39;00m
+[38;5;28;03m# -----------------------[39;00m
+models.Base.metadata.create_all(bind=engine)
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_db():
+    db = SessionLocal()
+    [38;5;18;01mtry[39;00m:
+        [38;5;18;01myield[39;00m db
+    [38;5;18;01mfinally[39;00m:
+        db.close()
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# FastAPI app + CORS[39;00m
+[38;5;28;03m# -----------------------[39;00m
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[[38;5;21m"[39m[38;5;21mhttp://localhost:3000[39m[38;5;21m"[39m],  [38;5;28;03m# adjust as needed[39;00m
+    allow_credentials=[38;5;18;01mTrue[39;00m,
+    allow_methods=[[38;5;21m"[39m[38;5;21m*[39m[38;5;21m"[39m],
+    allow_headers=[[38;5;21m"[39m[38;5;21m*[39m[38;5;21m"[39m],
+)
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Embedding model & storage dirs[39;00m
+[38;5;28;03m# -----------------------[39;00m
+embedding_model = SentenceTransformer([38;5;21m"[39m[38;5;21mall-MiniLM-L6-v2[39m[38;5;21m"[39m)
+EMBED_DIM = embedding_model.get_sentence_embedding_dimension()
+
+UPLOAD_DIR   = [38;5;21m"[39m[38;5;21mshared_storage/uploaded_files[39m[38;5;21m"[39m
+VECTOR_ROOT  = [38;5;21m"[39m[38;5;21mshared_storage/vector_stores[39m[38;5;21m"[39m
+os.makedirs(UPLOAD_DIR, exist_ok=[38;5;18;01mTrue[39;00m)
+os.makedirs(VECTOR_ROOT, exist_ok=[38;5;18;01mTrue[39;00m)
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Groq client (hardcoded API key)[39;00m
+[38;5;28;03m# -----------------------[39;00m
+GROQ_API_KEY = [38;5;21m"[39m[38;5;21mgsk_MhB1BTKi0p2YJoBtuAsEWGdyb3FYBe9Rf6ZJ6BWLO2pIZL59ba6B[39m[38;5;21m"[39m
+groq_client  = Groq(api_key=GROQ_API_KEY)
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Initialize our speller[39;00m
+[38;5;28;03m# -----------------------[39;00m
+corrector = SpellingCorrector()
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Utility: normalize question[39;00m
+[38;5;28;03m# -----------------------[39;00m
+[38;5;18;01mdef[39;00m[38;5;250m [39mnormalize_question(q: str) -> str:
+[38;5;250m    [39m[38;5;21m"""[39m
+[38;5;21m    Lowercases, trims whitespace, and removes trailing punctuation.[39m
+[38;5;21m    """[39m
+    q = q.lower().strip()
+    q = re.sub([38;5;21mr[39m[38;5;21m"[39m[38;5;21m[?.!]+$[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m"[39m, q)  [38;5;28;03m# remove trailing ., ?, or ![39;00m
+    q = re.sub([38;5;21mr[39m[38;5;21m"[39m[38;5;21m\[39m[38;5;21ms+[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m [39m[38;5;21m"[39m, q)     [38;5;28;03m# collapse multiple spaces[39;00m
+    [38;5;18;01mreturn[39;00m q
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# CRUD Endpoints (unchanged)[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.post([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m"[39m, response_model=schemas.Course)
+[38;5;18;01mdef[39;00m[38;5;250m [39mcreate_course(course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    db_c = models.Course(name=course.name)
+    db.add(db_c)
+    db.commit()
+    db.refresh(db_c)
+    [38;5;18;01mreturn[39;00m db_c
+
+@app.get([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m"[39m, response_model=List[schemas.CourseOut])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_courses(db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m db.query(models.Course).all()
+
+@app.get([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m{course_id}[39m[38;5;21m"[39m, response_model=schemas.Course)
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_course(course_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    [38;5;18;01mif[39;00m [01mnot[00m c:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mCourse not found[39m[38;5;21m"[39m)
+    [38;5;18;01mreturn[39;00m c
+
+@app.put([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m{course_id}[39m[38;5;21m"[39m, response_model=schemas.Course)
+[38;5;18;01mdef[39;00m[38;5;250m [39mupdate_course(course_id: int, course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    [38;5;18;01mif[39;00m [01mnot[00m c:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mCourse not found[39m[38;5;21m"[39m)
+    c.name = course.name
+    db.commit()
+    db.refresh(c)
+    [38;5;18;01mreturn[39;00m c
+
+@app.delete([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m{course_id}[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mdelete_course(course_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    [38;5;18;01mif[39;00m [01mnot[00m c:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mCourse not found[39m[38;5;21m"[39m)
+    db.delete(c)
+    db.commit()
+    [38;5;18;01mreturn[39;00m {[38;5;21m"[39m[38;5;21mmessage[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mCourse deleted[39m[38;5;21m"[39m}
+
+@app.post([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m{course_id}[39m[38;5;21m/years/[39m[38;5;21m"[39m, response_model=schemas.Year)
+[38;5;18;01mdef[39;00m[38;5;250m [39mcreate_year(course_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    y = models.Year(name=year.name, course_id=course_id)
+    db.add(y)
+    db.commit()
+    db.refresh(y)
+    [38;5;18;01mreturn[39;00m y
+
+@app.get([38;5;21m"[39m[38;5;21m/courses/[39m[38;5;21m{course_id}[39m[38;5;21m/years/[39m[38;5;21m"[39m, response_model=List[schemas.Year])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_years(course_id: int, db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m db.query(models.Year).filter_by(course_id=course_id).all()
+
+@app.put([38;5;21m"[39m[38;5;21m/years/[39m[38;5;21m{year_id}[39m[38;5;21m"[39m, response_model=schemas.Year)
+[38;5;18;01mdef[39;00m[38;5;250m [39mupdate_year(year_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    y = db.query(models.Year).get(year_id)
+    [38;5;18;01mif[39;00m [01mnot[00m y:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mYear not found[39m[38;5;21m"[39m)
+    y.name = year.name
+    db.commit()
+    db.refresh(y)
+    [38;5;18;01mreturn[39;00m y
+
+@app.delete([38;5;21m"[39m[38;5;21m/years/[39m[38;5;21m{year_id}[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mdelete_year(year_id: int, db: Session = Depends(get_db)):
+    y = db.query(models.Year).get(year_id)
+    [38;5;18;01mif[39;00m [01mnot[00m y:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mYear not found[39m[38;5;21m"[39m)
+    db.delete(y)
+    db.commit()
+    [38;5;18;01mreturn[39;00m {[38;5;21m"[39m[38;5;21mmessage[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mYear deleted[39m[38;5;21m"[39m}
+
+@app.post([38;5;21m"[39m[38;5;21m/years/[39m[38;5;21m{year_id}[39m[38;5;21m/semesters/[39m[38;5;21m"[39m, response_model=schemas.Semester)
+[38;5;18;01mdef[39;00m[38;5;250m [39mcreate_semester(year_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    s = models.Semester(name=semester.name, year_id=year_id)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    [38;5;18;01mreturn[39;00m s
+
+@app.get([38;5;21m"[39m[38;5;21m/years/[39m[38;5;21m{year_id}[39m[38;5;21m/semesters/[39m[38;5;21m"[39m, response_model=List[schemas.Semester])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_semesters(year_id: int, db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m db.query(models.Semester).filter_by(year_id=year_id).all()
+
+@app.put([38;5;21m"[39m[38;5;21m/semesters/[39m[38;5;21m{semester_id}[39m[38;5;21m"[39m, response_model=schemas.Semester)
+[38;5;18;01mdef[39;00m[38;5;250m [39mupdate_semester(semester_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    s = db.query(models.Semester).get(semester_id)
+    [38;5;18;01mif[39;00m [01mnot[00m s:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mSemester not found[39m[38;5;21m"[39m)
+    s.name = semester.name
+    db.commit()
+    db.refresh(s)
+    [38;5;18;01mreturn[39;00m s
+
+@app.delete([38;5;21m"[39m[38;5;21m/semesters/[39m[38;5;21m{semester_id}[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mdelete_semester(semester_id: int, db: Session = Depends(get_db)):
+    s = db.query(models.Semester).get(semester_id)
+    [38;5;18;01mif[39;00m [01mnot[00m s:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mSemester not found[39m[38;5;21m"[39m)
+    db.delete(s)
+    db.commit()
+    [38;5;18;01mreturn[39;00m {[38;5;21m"[39m[38;5;21mmessage[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mSemester deleted[39m[38;5;21m"[39m}
+
+@app.post([38;5;21m"[39m[38;5;21m/semesters/[39m[38;5;21m{semester_id}[39m[38;5;21m/units/[39m[38;5;21m"[39m, response_model=schemas.Unit)
+[38;5;18;01mdef[39;00m[38;5;250m [39mcreate_unit(semester_id: int, unit: schemas.UnitCreate, db: Session = Depends(get_db)):
+    u = models.Unit(name=unit.name, semester_id=semester_id)
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    [38;5;18;01mreturn[39;00m u
+
+@app.get([38;5;21m"[39m[38;5;21m/semesters/[39m[38;5;21m{semester_id}[39m[38;5;21m/units/[39m[38;5;21m"[39m, response_model=List[schemas.Unit])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_units(semester_id: int, db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m db.query(models.Unit).filter_by(semester_id=semester_id).all()
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Document Upload & Management[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.post([38;5;21m"[39m[38;5;21m/documents/[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mupload_document(
+    unit_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    ts       = datetime.now().strftime([38;5;21m"[39m[38;5;21m%[39m[38;5;21mY[39m[38;5;21m%[39m[38;5;21mm[39m[38;5;21m%d[39m[38;5;21m%[39m[38;5;21mH[39m[38;5;21m%[39m[38;5;21mM[39m[38;5;21m%[39m[38;5;21mS[39m[38;5;21m"[39m)
+    filename = [38;5;21mf[39m[38;5;21m"[39m[38;5;21m{[39mts[38;5;21m}[39m[38;5;21m_[39m[38;5;21m{[39mfile.filename[38;5;21m}[39m[38;5;21m"[39m
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    [38;5;18;01mwith[39;00m open(filepath, [38;5;21m"[39m[38;5;21mwb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+        f.write(file.file.read())
+
+    doc = models.Document(filename=file.filename, filepath=filepath, unit_id=unit_id)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    [38;5;18;01mreturn[39;00m {[38;5;21m"[39m[38;5;21mmessage[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mUpload successful[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21mid[39m[38;5;21m"[39m: doc.id}
+
+@app.get([38;5;21m"[39m[38;5;21m/documents/[39m[38;5;21m"[39m, response_model=List[schemas.DocumentWithPath])
+[38;5;18;01mdef[39;00m[38;5;250m [39mlist_documents(db: Session = Depends(get_db)):
+    out = []
+    [38;5;18;01mfor[39;00m doc [01min[00m db.query(models.Document).all():
+        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        path = [38;5;21mf[39m[38;5;21m"[39m[38;5;21m{[39mc.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39my.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39ms.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39mu.name[38;5;21m}[39m[38;5;21m"[39m
+        out.append(schemas.DocumentWithPath(
+            id=doc.id, filename=doc.filename, filepath=doc.filepath, course_path=path
+        ))
+    [38;5;18;01mreturn[39;00m out
+
+@app.get([38;5;21m"[39m[38;5;21m/documents/download/[39m[38;5;21m{doc_id}[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mdownload_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).get(doc_id)
+    [38;5;18;01mif[39;00m [01mnot[00m doc:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mDocument not found[39m[38;5;21m"[39m)
+    [38;5;18;01mreturn[39;00m FileResponse(path=doc.filepath, filename=doc.filename, media_type=[38;5;21m"[39m[38;5;21mapplication/pdf[39m[38;5;21m"[39m)
+
+@app.delete([38;5;21m"[39m[38;5;21m/documents/[39m[38;5;21m{doc_id}[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mdelete_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).get(doc_id)
+    [38;5;18;01mif[39;00m [01mnot[00m doc:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mDocument not found[39m[38;5;21m"[39m)
+    [38;5;18;01mif[39;00m os.path.exists(doc.filepath):
+        os.remove(doc.filepath)
+    db.delete(doc)
+    db.commit()
+    [38;5;18;01mreturn[39;00m {[38;5;21m"[39m[38;5;21mmessage[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mDocument deleted[39m[38;5;21m"[39m}
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Process Document: Store heading, pages, source_file in metadata[39;00m
+[38;5;28;03m# -----------------------[39;00m
+[38;5;18;01mdef[39;00m[38;5;250m [39mprocess_document_stream(doc_id: int, db: Session) -> Generator[str, [38;5;18;01mNone[39;00m, [38;5;18;01mNone[39;00m]:
+[38;5;250m    [39m[38;5;21m"""[39m
+[38;5;21m    Streaming generator that[39m
+[38;5;21m      1) Splits the PDF into chunks + metadata,[39m
+[38;5;21m      2) Embeds each chunk, indexes/flattens into a FAISS index,[39m
+[38;5;21m      3) Yields SSE lines so the front-end can show progress.[39m
+[38;5;21m    """[39m
+    doc = db.query(models.Document).get(doc_id)
+    [38;5;18;01mif[39;00m [01mnot[00m doc:
+        [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: Document not found[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+        [38;5;18;01mreturn[39;00m
+
+    [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: Processing [39m[38;5;21m{[39mdoc.filename[38;5;21m}[39m[38;5;21m...[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+    [38;5;18;01mtry[39;00m:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=[38;5;21m500[39m,
+            overlap=[38;5;21m100[39m
+        )
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: Failed during splitting: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+        [38;5;18;01mreturn[39;00m
+
+    [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: Split into [39m[38;5;21m{[39mlen(chunks)[38;5;21m}[39m[38;5;21m chunks.[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+    [38;5;18;01mif[39;00m [01mnot[00m chunks:
+        [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: No chunks generated.[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+        [38;5;18;01mreturn[39;00m
+
+    [38;5;28;03m# Embed + index each chunk[39;00m
+    embeddings = embedding_model.encode(chunks)
+    unit_dir   = os.path.join(VECTOR_ROOT, [38;5;21mf[39m[38;5;21m"[39m[38;5;21munit_[39m[38;5;21m{[39mdoc.unit_id[38;5;21m}[39m[38;5;21m"[39m)
+    os.makedirs(unit_dir, exist_ok=[38;5;18;01mTrue[39;00m)
+
+    idx_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mindex.faiss[39m[38;5;21m"[39m)
+    map_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mdoc_id_map.pkl[39m[38;5;21m"[39m)
+
+    [38;5;18;01mif[39;00m os.path.exists(idx_path):
+        index = faiss.read_index(idx_path)
+        [38;5;18;01mwith[39;00m open(map_path, [38;5;21m"[39m[38;5;21mrb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+            doc_map = pickle.load(f)
+    [38;5;18;01melse[39;00m:
+        index  = faiss.IndexFlatL2(EMBED_DIM)
+        doc_map = {}
+
+    base = index.ntotal
+    index.add(embeddings)
+    [38;5;18;01mfor[39;00m i, chunk_text [01min[00m enumerate(chunks):
+        doc_map[base + i] = {
+            [38;5;21m"[39m[38;5;21mdoc_id[39m[38;5;21m"[39m:     doc.id,
+            [38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m:       chunk_text,
+            [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m:    metadata[i].get([38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m),
+            [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m:      metadata[i].get([38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m),
+            [38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m: metadata[i].get([38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m)
+        }
+
+    faiss.write_index(index, idx_path)
+    [38;5;18;01mwith[39;00m open(map_path, [38;5;21m"[39m[38;5;21mwb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+        pickle.dump(doc_map, f)
+
+    [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: Processing complete![39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+@app.get([38;5;21m"[39m[38;5;21m/documents/[39m[38;5;21m{doc_id}[39m[38;5;21m/process[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mprocess_document(doc_id: int, db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m StreamingResponse(process_document_stream(doc_id, db), media_type=[38;5;21m"[39m[38;5;21mtext/event-stream[39m[38;5;21m"[39m)
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Return chunks + metadata (inspection)[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.get([38;5;21m"[39m[38;5;21m/documents/[39m[38;5;21m{doc_id}[39m[38;5;21m/chunks[39m[38;5;21m"[39m, response_model=List[Dict[str, Any]])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_document_chunks(doc_id: int, db: Session = Depends(get_db)):
+[38;5;250m    [39m[38;5;21m"""[39m
+[38;5;21m    Return all chunks + metadata for a given document,[39m
+[38;5;21m    so you can inspect headings/pages and verify chunking correctness.[39m
+[38;5;21m    """[39m
+    doc = db.query(models.Document).get(doc_id)
+    [38;5;18;01mif[39;00m [01mnot[00m doc:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m404[39m, [38;5;21m"[39m[38;5;21mDocument not found[39m[38;5;21m"[39m)
+
+    [38;5;18;01mtry[39;00m:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=[38;5;21m500[39m,
+            overlap=[38;5;21m100[39m
+        )
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m500[39m, [38;5;21mf[39m[38;5;21m"[39m[38;5;21mError splitting document: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+
+    response = []
+    [38;5;18;01mfor[39;00m meta, chunk_text [01min[00m zip(metadata, chunks):
+        response.append({
+            [38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m: meta[[38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m],
+            [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m:     meta[[38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m],
+            [38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m:        chunk_text,
+            [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m:       meta[[38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m],
+        })
+
+    [38;5;18;01mreturn[39;00m response
+
+@app.get([38;5;21m"[39m[38;5;21m/units/[39m[38;5;21m{unit_id}[39m[38;5;21m/documents/[39m[38;5;21m"[39m, response_model=List[schemas.DocumentWithPath])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
+    docs = db.query(models.Document).filter(models.Document.unit_id == unit_id).all()
+    out = []
+    [38;5;18;01mfor[39;00m doc [01min[00m docs:
+        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        path = [38;5;21mf[39m[38;5;21m"[39m[38;5;21m{[39mc.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39my.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39ms.name[38;5;21m}[39m[38;5;21m → [39m[38;5;21m{[39mu.name[38;5;21m}[39m[38;5;21m"[39m
+        out.append(schemas.DocumentWithPath(
+            id=doc.id,
+            filename=doc.filename,
+            filepath=doc.filepath,
+            course_path=path
+        ))
+    [38;5;18;01mreturn[39;00m out
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# ASK Endpoint (non-streaming)[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.post([38;5;21m"[39m[38;5;21m/ask[39m[38;5;21m"[39m)
+[38;5;18;01mdef[39;00m[38;5;250m [39mask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    [38;5;18;01mtry[39;00m:
+        normalized_query = normalize_question(request.question)
+
+        [38;5;28;03m# Spell-correct[39;00m
+        corrected_query = corrector.correct_sentence(normalized_query)
+
+        [38;5;28;03m# Load FAISS index & doc_map for that unit[39;00m
+        unit_dir = os.path.join(VECTOR_ROOT, [38;5;21mf[39m[38;5;21m"[39m[38;5;21munit_[39m[38;5;21m{[39mrequest.unit_id[38;5;21m}[39m[38;5;21m"[39m)
+        idx_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mindex.faiss[39m[38;5;21m"[39m)
+        map_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mdoc_id_map.pkl[39m[38;5;21m"[39m)
+        [38;5;18;01mif[39;00m [01mnot[00m (os.path.exists(idx_path) [01mand[00m os.path.exists(map_path)):
+            [38;5;18;01mreturn[39;00m {
+                [38;5;21m"[39m[38;5;21manswer[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mNo vector store found for this unit. Please upload & process documents first.[39m[38;5;21m"[39m,
+                [38;5;21m"[39m[38;5;21mcitations[39m[38;5;21m"[39m: []
+            }
+
+        index = faiss.read_index(idx_path)
+        [38;5;18;01mwith[39;00m open(map_path, [38;5;21m"[39m[38;5;21mrb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+            doc_map = pickle.load(f)
+
+        [38;5;28;03m# Search for top-5 chunks[39;00m
+        question_embedding = embedding_model.encode([corrected_query])
+        _, I = index.search(question_embedding, k=[38;5;21m5[39m)
+        top_indices = [i [38;5;18;01mfor[39;00m i [01min[00m I[[38;5;21m0[39m] [38;5;18;01mif[39;00m i [01min[00m doc_map]
+
+        [38;5;28;03m# Build context for the LLM prompt[39;00m
+        context = [38;5;21m"[39m[38;5;21m\n[39m[38;5;21m"[39m.join(doc_map[i][[38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m] [38;5;18;01mfor[39;00m i [01min[00m top_indices)
+        prompt = [38;5;21mf[39m[38;5;21m"""[39m
+[38;5;21mYou are a helpful tutor. Use the notes below to answer the student[39m[38;5;21m'[39m[38;5;21ms question. Provide a clear, concise answer:[39m
+
+[38;5;21mNotes:[39m
+[38;5;21m{[39mcontext[38;5;21m}[39m
+
+[38;5;21mQuestion: [39m[38;5;21m{[39mrequest.question[38;5;21m}[39m
+[38;5;21mAnswer:[39m
+[38;5;21m"""[39m
+
+        completion = groq_client.chat.completions.create(
+            model=[38;5;21m"[39m[38;5;21mllama3-70b-8192[39m[38;5;21m"[39m,
+            messages=[
+                {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21msystem[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mYou are a helpful tutor.[39m[38;5;21m"[39m},
+                {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21muser[39m[38;5;21m"[39m,   [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: prompt}
+            ]
+        )
+        answer = completion.choices[[38;5;21m0[39m].message.content.strip()
+
+        [38;5;28;03m# Build citations[39;00m
+        citations = [
+            {
+                [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m:   doc_map[i].get([38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m),
+                [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m:     doc_map[i].get([38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m),
+                [38;5;21m"[39m[38;5;21mfile[39m[38;5;21m"[39m:      doc_map[i].get([38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m),
+            }
+            [38;5;18;01mfor[39;00m i [01min[00m top_indices
+        ]
+
+        [38;5;28;03m# Remove exact duplicates while preserving order[39;00m
+        seen = set()
+        unique_citations = []
+        [38;5;18;01mfor[39;00m c [01min[00m citations:
+            c_str = json.dumps(c, sort_keys=[38;5;18;01mTrue[39;00m)
+            [38;5;18;01mif[39;00m c_str [01mnot[00m [01min[00m seen:
+                seen.add(c_str)
+                unique_citations.append(c)
+
+        [38;5;18;01mreturn[39;00m {
+            [38;5;21m"[39m[38;5;21manswer[39m[38;5;21m"[39m: answer,
+            [38;5;21m"[39m[38;5;21mcitations[39m[38;5;21m"[39m: unique_citations
+        }
+
+    [38;5;18;01mexcept[39;00m AuthenticationError:
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m502[39m, [38;5;21m"[39m[38;5;21mGroq authentication failed—check your API key[39m[38;5;21m"[39m)
+    [38;5;18;01mexcept[39;00m HTTPException:
+        [38;5;18;01mraise[39;00m
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        traceback.print_exc()
+        [38;5;18;01mraise[39;00m HTTPException([38;5;21m500[39m, str(e))
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# ASK Streaming Endpoint[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.post([38;5;21m"[39m[38;5;21m/ask/stream[39m[38;5;21m"[39m)
+[38;5;18;01masync[39;00m [38;5;18;01mdef[39;00m[38;5;250m [39mask_question_stream(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    [38;5;18;01masync[39;00m [38;5;18;01mdef[39;00m[38;5;250m [39mgenerate_streaming_response() -> AsyncGenerator[str, [38;5;18;01mNone[39;00m]:
+        [38;5;18;01mtry[39;00m:
+            normalized_query = normalize_question(request.question)
+            corrected_query = corrector.correct_sentence(normalized_query)
+
+            [38;5;28;03m# Load FAISS index & doc_map[39;00m
+            unit_dir = os.path.join(VECTOR_ROOT, [38;5;21mf[39m[38;5;21m"[39m[38;5;21munit_[39m[38;5;21m{[39mrequest.unit_id[38;5;21m}[39m[38;5;21m"[39m)
+            idx_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mindex.faiss[39m[38;5;21m"[39m)
+            map_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mdoc_id_map.pkl[39m[38;5;21m"[39m)
+            [38;5;18;01mif[39;00m [01mnot[00m (os.path.exists(idx_path) [01mand[00m os.path.exists(map_path)):
+                msg = [38;5;21m"[39m[38;5;21mNo vector store found for this unit. Please upload & process documents first.[39m[38;5;21m"[39m
+                [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(msg.split()):
+                    token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                    data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                    [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                    [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+                [38;5;28;03m# Send empty citations array, then [DONE][39;00m
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mjson.dumps({[38;5;21m'[39m[38;5;21mcitations[39m[38;5;21m'[39m:[38;5;250m [39m[]})[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mreturn[39;00m
+
+            index = faiss.read_index(idx_path)
+            [38;5;18;01mwith[39;00m open(map_path, [38;5;21m"[39m[38;5;21mrb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+                doc_map = pickle.load(f)
+
+            [38;5;28;03m# Search top-5 chunks[39;00m
+            question_embedding = embedding_model.encode([corrected_query])
+            _, I = index.search(question_embedding, k=[38;5;21m5[39m)
+            top_indices = [i [38;5;18;01mfor[39;00m i [01min[00m I[[38;5;21m0[39m] [38;5;18;01mif[39;00m i [01min[00m doc_map]
+
+            [38;5;28;03m# Build prompt context[39;00m
+            context = [38;5;21m"[39m[38;5;21m\n[39m[38;5;21m"[39m.join(doc_map[i][[38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m] [38;5;18;01mfor[39;00m i [01min[00m top_indices)
+            prompt = [38;5;21mf[39m[38;5;21m"""[39m
+[38;5;21mYou are a helpful tutor. Use the notes below to answer the student[39m[38;5;21m'[39m[38;5;21ms question. Provide a clear, concise answer:[39m
+
+[38;5;21mNotes:[39m
+[38;5;21m{[39mcontext[38;5;21m}[39m
+
+[38;5;21mQuestion: [39m[38;5;21m{[39mrequest.question[38;5;21m}[39m
+[38;5;21mAnswer:[39m
+[38;5;21m"""[39m
+
+            [38;5;28;03m# Stream from Groq[39;00m
+            stream = groq_client.chat.completions.create(
+                model=[38;5;21m"[39m[38;5;21mllama3-70b-8192[39m[38;5;21m"[39m,
+                messages=[
+                    {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21msystem[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mYou are a helpful tutor.[39m[38;5;21m"[39m},
+                    {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21muser[39m[38;5;21m"[39m,   [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: prompt}
+                ],
+                stream=[38;5;18;01mTrue[39;00m,
+                temperature=[38;5;21m0.7[39m,
+                max_tokens=[38;5;21m1000[39m,
+            )
+
+            [38;5;28;03m# Emit tokens as SSE[39;00m
+            [38;5;18;01mfor[39;00m chunk [01min[00m stream:
+                [38;5;18;01mif[39;00m chunk.choices[[38;5;21m0[39m].delta.content:
+                    token = chunk.choices[[38;5;21m0[39m].delta.content
+                    data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                    [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                    [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.01[39m)
+
+            [38;5;28;03m# Build citations[39;00m
+            citations = [
+                {
+                    [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m:   doc_map[i].get([38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m),
+                    [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m:     doc_map[i].get([38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m),
+                    [38;5;21m"[39m[38;5;21mfile[39m[38;5;21m"[39m:      doc_map[i].get([38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m),
+                }
+                [38;5;18;01mfor[39;00m i [01min[00m top_indices
+            ]
+
+            [38;5;28;03m# Remove exact duplicates while preserving order[39;00m
+            seen = set()
+            unique_citations = []
+            [38;5;18;01mfor[39;00m c [01min[00m citations:
+                c_str = json.dumps(c, sort_keys=[38;5;18;01mTrue[39;00m)
+                [38;5;18;01mif[39;00m c_str [01mnot[00m [01min[00m seen:
+                    seen.add(c_str)
+                    unique_citations.append(c)
+
+            [38;5;28;03m# At end, send the unique citations array[39;00m
+            [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mjson.dumps({[38;5;21m'[39m[38;5;21mcitations[39m[38;5;21m'[39m:[38;5;250m [39munique_citations})[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+        [38;5;18;01mexcept[39;00m AuthenticationError:
+            err = [38;5;21m"[39m[38;5;21mGroq authentication failed—check your API key[39m[38;5;21m"[39m
+            [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(err.split()):
+                token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+            [38;5;28;03m# End with no citations[39;00m
+            [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mjson.dumps({[38;5;21m'[39m[38;5;21mcitations[39m[38;5;21m'[39m:[38;5;250m [39m[]})[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+        [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+            err = str(e)
+            [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(err.split()):
+                token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+            [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mjson.dumps({[38;5;21m'[39m[38;5;21mcitations[39m[38;5;21m'[39m:[38;5;250m [39m[]})[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+    [38;5;18;01mreturn[39;00m StreamingResponse(
+        generate_streaming_response(),
+        media_type=[38;5;21m"[39m[38;5;21mtext/event-stream[39m[38;5;21m"[39m,
+        headers={
+            [38;5;21m"[39m[38;5;21mCache-Control[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mno-cache[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mConnection[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mkeep-alive[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Origin[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mhttp://localhost:3000[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Methods[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mGET, POST, OPTIONS[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Headers[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mContent-Type[39m[38;5;21m"[39m,
+        }
+    )
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# (Optional) ask/stream-simulated if you still want it[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.post([38;5;21m"[39m[38;5;21m/ask/stream-simulated[39m[38;5;21m"[39m)
+[38;5;18;01masync[39;00m [38;5;18;01mdef[39;00m[38;5;250m [39mask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    [38;5;18;01masync[39;00m [38;5;18;01mdef[39;00m[38;5;250m [39msimulate_streaming_response() -> AsyncGenerator[str, [38;5;18;01mNone[39;00m]:
+        [38;5;18;01mtry[39;00m:
+            unit_dir = os.path.join(VECTOR_ROOT, [38;5;21mf[39m[38;5;21m"[39m[38;5;21munit_[39m[38;5;21m{[39mrequest.unit_id[38;5;21m}[39m[38;5;21m"[39m)
+            idx_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mindex.faiss[39m[38;5;21m"[39m)
+            map_path = os.path.join(unit_dir, [38;5;21m"[39m[38;5;21mdoc_id_map.pkl[39m[38;5;21m"[39m)
+            [38;5;18;01mif[39;00m [01mnot[00m (os.path.exists(idx_path) [01mand[00m os.path.exists(map_path)):
+                msg = [38;5;21m"[39m[38;5;21mNo vector store found for this unit. Please upload & process documents first.[39m[38;5;21m"[39m
+                [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(msg.split()):
+                    token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                    data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                    [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                    [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+                [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mreturn[39;00m
+
+            index = faiss.read_index(idx_path)
+            [38;5;18;01mwith[39;00m open(map_path, [38;5;21m"[39m[38;5;21mrb[39m[38;5;21m"[39m) [38;5;18;01mas[39;00m f:
+                doc_map = pickle.load(f)
+
+            original_query  = request.question
+            corrected_query = corrector.correct_sentence(original_query)
+
+            question_embedding = embedding_model.encode([corrected_query])
+            _, I = index.search(question_embedding, k=[38;5;21m5[39m)
+            chunks = [doc_map[i][[38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m] [38;5;18;01mfor[39;00m i [01min[00m I[[38;5;21m0[39m] [38;5;18;01mif[39;00m i [01min[00m doc_map]
+
+            context = [38;5;21m"[39m[38;5;21m\n[39m[38;5;21m"[39m.join([38;5;21mf[39m[38;5;21m"[39m[38;5;21m- [39m[38;5;21m{[39mc[38;5;21m}[39m[38;5;21m"[39m [38;5;18;01mfor[39;00m c [01min[00m chunks)
+            prompt = [38;5;21mf[39m[38;5;21m"""[39m
+[38;5;21mYou are a helpful tutor. Based on the notes below, answer the student[39m[38;5;21m'[39m[38;5;21ms question.[39m
+
+[38;5;21mNotes:[39m
+[38;5;21m{[39mcontext[38;5;21m}[39m
+
+[38;5;21mQuestion: [39m[38;5;21m{[39moriginal_query[38;5;21m}[39m
+[38;5;21mAnswer:[39m
+[38;5;21m"""[39m
+
+            completion = groq_client.chat.completions.create(
+                model=[38;5;21m"[39m[38;5;21mllama3-70b-8192[39m[38;5;21m"[39m,
+                messages=[
+                    {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21msystem[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mYou are a helpful tutor.[39m[38;5;21m"[39m},
+                    {[38;5;21m"[39m[38;5;21mrole[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21muser[39m[38;5;21m"[39m,   [38;5;21m"[39m[38;5;21mcontent[39m[38;5;21m"[39m: prompt}
+                ]
+            )
+            full_answer = completion.choices[[38;5;21m0[39m].message.content.strip()
+            words = full_answer.split()
+
+            [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(words):
+                token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.05[39m)
+
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+        [38;5;18;01mexcept[39;00m AuthenticationError:
+            err = [38;5;21m"[39m[38;5;21mGroq authentication failed—check your API key[39m[38;5;21m"[39m
+            [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(err.split()):
+                token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+        [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+            err = str(e)
+            [38;5;18;01mfor[39;00m i, word [01min[00m enumerate(err.split()):
+                token = word [38;5;18;01mif[39;00m i == [38;5;21m0[39m [38;5;18;01melse[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m [39m[38;5;21m{[39mword[38;5;21m}[39m[38;5;21m"[39m
+                data = json.dumps({[38;5;21m"[39m[38;5;21mtoken[39m[38;5;21m"[39m: token})
+                [38;5;18;01myield[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21mdata: [39m[38;5;21m{[39mdata[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+                [38;5;18;01mawait[39;00m asyncio.sleep([38;5;21m0.03[39m)
+            [38;5;18;01myield[39;00m [38;5;21m"[39m[38;5;21mdata: [DONE][39m[38;5;21m\n[39m[38;5;21m\n[39m[38;5;21m"[39m
+
+    [38;5;18;01mreturn[39;00m StreamingResponse(
+        simulate_streaming_response(),
+        media_type=[38;5;21m"[39m[38;5;21mtext/event-stream[39m[38;5;21m"[39m,
+        headers={
+            [38;5;21m"[39m[38;5;21mCache-Control[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mno-cache[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mConnection[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mkeep-alive[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Origin[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mhttp://localhost:3000[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Methods[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mGET, POST, OPTIONS[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21mAccess-Control-Allow-Headers[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mContent-Type[39m[38;5;21m"[39m,
+        }
+    )
+
+[38;5;28;03m# -----------------------[39;00m
+[38;5;28;03m# Course Tree endpoint (unchanged)[39;00m
+[38;5;28;03m# -----------------------[39;00m
+@app.get([38;5;21m"[39m[38;5;21m/tree/[39m[38;5;21m"[39m, response_model=List[schemas.Course])
+[38;5;18;01mdef[39;00m[38;5;250m [39mget_course_tree(db: Session = Depends(get_db)):
+    [38;5;18;01mreturn[39;00m db.query(models.Course).all()
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Document Chunker
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/chunker.py
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;18;01mimport[39;00m[38;5;250m [39mfitz  [38;5;28;03m# PyMuPDF[39;00m
+[38;5;18;01mimport[39;00m[38;5;250m [39mpdfplumber
+[38;5;18;01mfrom[39;00m[38;5;250m [39mtyping[38;5;250m [39m[38;5;18;01mimport[39;00m List, Tuple, Dict, Optional
+[38;5;18;01mimport[39;00m[38;5;250m [39mlogging
+[38;5;18;01mfrom[39;00m[38;5;250m [39mcollections[38;5;250m [39m[38;5;18;01mimport[39;00m defaultdict
+
+[38;5;28;03m# Configure logging[39;00m
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mChunkMetadata(Dict):
+    chunk_index: int
+    heading: str
+    source_file: str
+    pages: List[str]
+
+[38;5;18;01mdef[39;00m[38;5;250m [39mdetect_headings_by_fontsize(
+    page: fitz.Page,
+    min_font_size: float = [38;5;21m12.0[39m,  [38;5;28;03m# Lowered for proposals[39;00m
+    max_words: int = [38;5;21m20[39m  [38;5;28;03m# Increased for longer headings in legal docs[39;00m
+) -> List[Tuple[str, Tuple[float, float, float, float], float]]:
+[38;5;250m    [39m[38;5;21m"""Detect headings based on font size and layout."""[39m
+    headings = []
+    [38;5;18;01mtry[39;00m:
+        page_dict = page.get_text([38;5;21m"[39m[38;5;21mdict[39m[38;5;21m"[39m)
+        blocks = page_dict.get([38;5;21m"[39m[38;5;21mblocks[39m[38;5;21m"[39m, [])
+        [38;5;18;01mfor[39;00m block [01min[00m blocks:
+            [38;5;18;01mif[39;00m block.get([38;5;21m"[39m[38;5;21mtype[39m[38;5;21m"[39m) == [38;5;21m0[39m:
+                [38;5;18;01mfor[39;00m line [01min[00m block.get([38;5;21m"[39m[38;5;21mlines[39m[38;5;21m"[39m, []):
+                    [38;5;18;01mfor[39;00m span [01min[00m line.get([38;5;21m"[39m[38;5;21mspans[39m[38;5;21m"[39m, []):
+                        size = span.get([38;5;21m"[39m[38;5;21msize[39m[38;5;21m"[39m, [38;5;21m0[39m)
+                        text = span.get([38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m"[39m).strip()
+                        [38;5;18;01mif[39;00m (
+                            text
+                            [01mand[00m size >= min_font_size
+                            [01mand[00m [01mnot[00m text.islower()
+                            [01mand[00m len(text.split()) < max_words
+                            [01mand[00m [01mnot[00m text.startswith(([38;5;21m"[39m[38;5;21m0[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m1[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m2[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m3[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m4[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m5[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m6[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m7[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m8[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21m9[39m[38;5;21m"[39m))  [38;5;28;03m# Avoid numbered lists[39;00m
+                        ):
+                            headings.append((text, span.get([38;5;21m"[39m[38;5;21mbbox[39m[38;5;21m"[39m, ([38;5;21m0[39m, [38;5;21m0[39m, [38;5;21m0[39m, [38;5;21m0[39m)), size))
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        logger.error([38;5;21mf[39m[38;5;21m"[39m[38;5;21mError detecting headings on page [39m[38;5;21m{[39mpage.number[38;5;21m}[39m[38;5;21m: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+    seen = set()
+    [38;5;18;01mreturn[39;00m [
+        (h[[38;5;21m0[39m], h[[38;5;21m1[39m], h[[38;5;21m2[39m])
+        [38;5;18;01mfor[39;00m h [01min[00m sorted(headings, key=[38;5;18;01mlambda[39;00m x: x[[38;5;21m1[39m][[38;5;21m1[39m])
+        [38;5;18;01mif[39;00m h[[38;5;21m0[39m] [01mnot[00m [01min[00m seen [01mand[00m [01mnot[00m seen.add(h[[38;5;21m0[39m])
+    ]
+
+[38;5;18;01mdef[39;00m[38;5;250m [39mextract_tables_from_pdf(pdf_path: str) -> Dict[int, List[str]]:
+[38;5;250m    [39m[38;5;21m"""Extract tables from PDF using pdfplumber."""[39m
+    tables = {}
+    [38;5;18;01mtry[39;00m:
+        [38;5;18;01mwith[39;00m pdfplumber.open(pdf_path) [38;5;18;01mas[39;00m pdf:
+            [38;5;18;01mfor[39;00m page_num, page [01min[00m enumerate(pdf.pages):
+                page_tables = []
+                [38;5;28;03m# Use explicit table settings for better detection[39;00m
+                extracted_tables = page.extract_tables({
+                    [38;5;21m"[39m[38;5;21mvertical_strategy[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mlines[39m[38;5;21m"[39m,
+                    [38;5;21m"[39m[38;5;21mhorizontal_strategy[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mlines[39m[38;5;21m"[39m,
+                    [38;5;21m"[39m[38;5;21mkeep_blank_chars[39m[38;5;21m"[39m: [38;5;18;01mTrue[39;00m
+                })
+                [38;5;18;01mfor[39;00m table [01min[00m extracted_tables:
+                    markdown_table = table_to_markdown(table)
+                    [38;5;18;01mif[39;00m markdown_table:
+                        page_tables.append(markdown_table)
+                tables[page_num] = page_tables
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        logger.error([38;5;21mf[39m[38;5;21m"[39m[38;5;21mError extracting tables from PDF [39m[38;5;21m{[39mpdf_path[38;5;21m}[39m[38;5;21m: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+        [38;5;18;01mreturn[39;00m {}
+    [38;5;18;01mreturn[39;00m tables
+
+[38;5;18;01mdef[39;00m[38;5;250m [39mtable_to_markdown(table: List[List]) -> str:
+[38;5;250m    [39m[38;5;21m"""Convert table data to Markdown format."""[39m
+    [38;5;18;01mif[39;00m [01mnot[00m table [01mor[00m [01mnot[00m isinstance(table, list) [01mor[00m [01mnot[00m isinstance(table[[38;5;21m0[39m], list) [01mor[00m [01mnot[00m table[[38;5;21m0[39m]:
+        [38;5;18;01mreturn[39;00m [38;5;21m"[39m[38;5;21m"[39m
+    col_count = len(table[[38;5;21m0[39m])
+    table = [[([38;5;21m"[39m[38;5;21m"[39m [38;5;18;01mif[39;00m cell [01mis[00m [38;5;18;01mNone[39;00m [38;5;18;01melse[39;00m str(cell).strip()) [38;5;18;01mfor[39;00m cell [01min[00m row] [38;5;18;01mfor[39;00m row [01min[00m table [38;5;18;01mif[39;00m len(row) == col_count]
+    [38;5;18;01mif[39;00m [01mnot[00m table:
+        [38;5;18;01mreturn[39;00m [38;5;21m"[39m[38;5;21m"[39m
+    header = [38;5;21m"[39m[38;5;21m| [39m[38;5;21m"[39m + [38;5;21m"[39m[38;5;21m | [39m[38;5;21m"[39m.join(table[[38;5;21m0[39m]) + [38;5;21m"[39m[38;5;21m |[39m[38;5;21m"[39m
+    sep = [38;5;21m"[39m[38;5;21m| [39m[38;5;21m"[39m + [38;5;21m"[39m[38;5;21m | [39m[38;5;21m"[39m.join([38;5;21m"[39m[38;5;21m---[39m[38;5;21m"[39m [38;5;18;01mfor[39;00m _ [01min[00m table[[38;5;21m0[39m]) + [38;5;21m"[39m[38;5;21m |[39m[38;5;21m"[39m
+    body = [38;5;21m"[39m[38;5;21m\n[39m[38;5;21m"[39m.join([38;5;21m"[39m[38;5;21m| [39m[38;5;21m"[39m + [38;5;21m"[39m[38;5;21m | [39m[38;5;21m"[39m.join(row) + [38;5;21m"[39m[38;5;21m |[39m[38;5;21m"[39m [38;5;18;01mfor[39;00m row [01min[00m table[[38;5;21m1[39m:])
+    [38;5;18;01mreturn[39;00m [38;5;21mf[39m[38;5;21m"[39m[38;5;21m{[39mheader[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m{[39msep[38;5;21m}[39m[38;5;21m\n[39m[38;5;21m{[39mbody[38;5;21m}[39m[38;5;21m"[39m
+
+[38;5;18;01mdef[39;00m[38;5;250m [39mextract_page_text_with_words(
+    page: fitz.Page, clip: Optional[Tuple[float, float, float, float]] = [38;5;18;01mNone[39;00m
+) -> Tuple[str, List[Tuple[str, int]]]:
+[38;5;250m    [39m[38;5;21m"""Extract text and word-to-page mapping from a page with optional clipping."""[39m
+    [38;5;18;01mtry[39;00m:
+        text = page.get_text([38;5;21m"[39m[38;5;21mtext[39m[38;5;21m"[39m, clip=clip).strip()
+        words_data = page.get_text([38;5;21m"[39m[38;5;21mwords[39m[38;5;21m"[39m, clip=clip)  [38;5;28;03m# Returns (x0, y0, x1, y1, word, block_no, line_no, word_no)[39;00m
+        word_page_map = [(word[[38;5;21m4[39m], page.number) [38;5;18;01mfor[39;00m word [01min[00m words_data]
+        [38;5;18;01mreturn[39;00m text, word_page_map
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        logger.error([38;5;21mf[39m[38;5;21m"[39m[38;5;21mError extracting text from page [39m[38;5;21m{[39mpage.number[38;5;21m}[39m[38;5;21m: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+        [38;5;18;01mreturn[39;00m [38;5;21m"[39m[38;5;21m"[39m, []
+
+[38;5;18;01mdef[39;00m[38;5;250m [39mchunk_section(
+    section_text: str,
+    heading: str,
+    word_page_map: List[Tuple[str, int]],
+    real_labels: List[str],
+    filename: str,
+    max_words: int,
+    overlap: int,
+    chunk_index: int
+) -> Tuple[List[str], List[ChunkMetadata], int]:
+[38;5;250m    [39m[38;5;21m"""Chunk a section of text with precise page metadata."""[39m
+    chunks, metadata = [], []
+    words = section_text.split()
+    total_words = len(words)
+
+    [38;5;18;01mif[39;00m [01mnot[00m word_page_map:
+        [38;5;28;03m# Fallback to approximation if no word-page mapping[39;00m
+        words_per_page = max([38;5;21m1[39m, total_words // max([38;5;21m1[39m, len(real_labels)))
+        start_word = [38;5;21m0[39m
+        [38;5;18;01mwhile[39;00m start_word < total_words:
+            end_word = min(start_word + max_words, total_words)
+            sub_words = words[start_word:end_word]
+            [38;5;18;01mif[39;00m [01mnot[00m sub_words:
+                [38;5;18;01mbreak[39;00m
+            sub_text = [38;5;21m"[39m[38;5;21m [39m[38;5;21m"[39m.join(sub_words)
+            chunk_text = [38;5;21mf[39m[38;5;21m"[39m[38;5;21m== [39m[38;5;21m{[39mheading[38;5;21m}[39m[38;5;21m ==[39m[38;5;21m\n[39m[38;5;21m{[39msub_text[38;5;21m}[39m[38;5;21m"[39m
+            approx_start = min(start_word // words_per_page, len(real_labels) - [38;5;21m1[39m)
+            approx_end = min((end_word - [38;5;21m1[39m) // words_per_page, len(real_labels) - [38;5;21m1[39m)
+            sub_pages = real_labels[approx_start:approx_end + [38;5;21m1[39m]
+            chunks.append(chunk_text)
+            metadata.append({
+                [38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m: chunk_index,
+                [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m: heading [01mor[00m [38;5;21m"[39m[38;5;21mNo heading detected[39m[38;5;21m"[39m,
+                [38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m: filename,
+                [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m: sub_pages
+            })
+            chunk_index += [38;5;21m1[39m
+            start_word += max_words - overlap
+        [38;5;18;01mreturn[39;00m chunks, metadata, chunk_index
+
+    [38;5;28;03m# Use word-page mapping for precise page assignment[39;00m
+    start_word = [38;5;21m0[39m
+    word_idx = [38;5;21m0[39m
+    [38;5;18;01mwhile[39;00m start_word < total_words:
+        end_word = min(start_word + max_words, total_words)
+        sub_words = words[start_word:end_word]
+        [38;5;18;01mif[39;00m [01mnot[00m sub_words:
+            [38;5;18;01mbreak[39;00m
+        sub_text = [38;5;21m"[39m[38;5;21m [39m[38;5;21m"[39m.join(sub_words)
+        chunk_text = [38;5;21mf[39m[38;5;21m"[39m[38;5;21m== [39m[38;5;21m{[39mheading[38;5;21m}[39m[38;5;21m ==[39m[38;5;21m\n[39m[38;5;21m{[39msub_text[38;5;21m}[39m[38;5;21m"[39m
+
+        [38;5;28;03m# Find pages for this chunk[39;00m
+        page_counts = defaultdict(int)
+        word_count = [38;5;21m0[39m
+        [38;5;18;01mfor[39;00m word, page_num [01min[00m word_page_map:
+            [38;5;18;01mif[39;00m word_idx <= word_count < word_idx + (end_word - start_word):
+                page_counts[page_num] += [38;5;21m1[39m
+            word_count += [38;5;21m1[39m
+        [38;5;28;03m# Assign the page with the most words, or fall back to range[39;00m
+        [38;5;18;01mif[39;00m page_counts:
+            most_common_page = max(page_counts, key=page_counts.get)
+            sub_pages = [real_labels[most_common_page] [38;5;18;01mif[39;00m most_common_page < len(real_labels) [38;5;18;01melse[39;00m str(most_common_page + [38;5;21m1[39m)]
+            [38;5;28;03m# Include multiple pages only for large chunks[39;00m
+            [38;5;18;01mif[39;00m end_word - start_word > max_words // [38;5;21m2[39m [01mand[00m len(page_counts) > [38;5;21m1[39m:
+                sub_pages = [
+                    real_labels[p] [38;5;18;01mif[39;00m p < len(real_labels) [38;5;18;01melse[39;00m str(p + [38;5;21m1[39m)
+                    [38;5;18;01mfor[39;00m p [01min[00m sorted(page_counts.keys())
+                ]
+        [38;5;18;01melse[39;00m:
+            sub_pages = real_labels[:]
+
+        chunks.append(chunk_text)
+        metadata.append({
+            [38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m: chunk_index,
+            [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m: heading [01mor[00m [38;5;21m"[39m[38;5;21mNo heading detected[39m[38;5;21m"[39m,
+            [38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m: filename,
+            [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m: sub_pages
+        })
+        chunk_index += [38;5;21m1[39m
+        start_word += max_words - overlap
+        word_idx += max_words - overlap
+    [38;5;18;01mreturn[39;00m chunks, metadata, chunk_index
+
+[38;5;18;01mdef[39;00m[38;5;250m [39msplit_document(
+    pdf_path: str,
+    *,
+    filename: str = [38;5;18;01mNone[39;00m,
+    max_words: int = [38;5;21m300[39m,  [38;5;28;03m# Reduced for precise citations[39;00m
+    overlap: int = [38;5;21m50[39m     [38;5;28;03m# Reduced to minimize redundancy[39;00m
+) -> Tuple[List[str], List[ChunkMetadata]]:
+[38;5;250m    [39m[38;5;21m"""Split PDF into chunks with headings, tables, and precise page metadata."""[39m
+    [38;5;18;01mif[39;00m [01mnot[00m pdf_path.endswith([38;5;21m"[39m[38;5;21m.pdf[39m[38;5;21m"[39m):
+        [38;5;18;01mraise[39;00m ValueError([38;5;21m"[39m[38;5;21mInvalid PDF path[39m[38;5;21m"[39m)
+    [38;5;18;01mif[39;00m max_words <= [38;5;21m0[39m [01mor[00m overlap < [38;5;21m0[39m [01mor[00m overlap >= max_words:
+        [38;5;18;01mraise[39;00m ValueError([38;5;21m"[39m[38;5;21mInvalid max_words or overlap values[39m[38;5;21m"[39m)
+
+    chunks, metadata = [], []
+    chunk_index = [38;5;21m0[39m
+    filename = filename [01mor[00m pdf_path
+
+    [38;5;18;01mtry[39;00m:
+        [38;5;18;01mwith[39;00m fitz.open(pdf_path) [38;5;18;01mas[39;00m doc:
+            [38;5;18;01mtry[39;00m:
+                toc = doc.get_toc()
+                use_outline = toc [01mand[00m len(toc) > [38;5;21m1[39m
+            [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+                logger.error([38;5;21mf[39m[38;5;21m"[39m[38;5;21mError reading TOC: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+                use_outline = [38;5;18;01mFalse[39;00m
+
+            tables_by_page = extract_tables_from_pdf(pdf_path)
+
+            [38;5;18;01mif[39;00m use_outline:
+                [38;5;18;01mtry[39;00m:
+                    labels = doc.get_page_labels()
+                [38;5;18;01mexcept[39;00m Exception:
+                    labels = [str(i + [38;5;21m1[39m) [38;5;18;01mfor[39;00m i [01min[00m range(doc.page_count)]
+                outline_sections = []
+                [38;5;18;01mfor[39;00m idx, (level, title, pg) [01min[00m enumerate(toc):
+                    [38;5;18;01mif[39;00m level [01min[00m ([38;5;21m1[39m, [38;5;21m2[39m):
+                        start = max([38;5;21m0[39m, min(doc.page_count - [38;5;21m1[39m, pg - [38;5;21m1[39m))
+                        end = min(doc.page_count - [38;5;21m1[39m, toc[idx + [38;5;21m1[39m][[38;5;21m2[39m] - [38;5;21m2[39m [38;5;18;01mif[39;00m idx + [38;5;21m1[39m < len(toc) [38;5;18;01melse[39;00m doc.page_count - [38;5;21m1[39m)
+                        [38;5;18;01mif[39;00m start <= end:
+                            outline_sections.append((title, start, end))
+                [38;5;18;01mfor[39;00m heading, start_pg, end_pg [01min[00m outline_sections:
+                    real_labels, pages_text, word_page_map = [], [], []
+                    [38;5;18;01mfor[39;00m p [01min[00m range(start_pg, end_pg + [38;5;21m1[39m):
+                        [38;5;18;01mif[39;00m p >= doc.page_count:
+                            [38;5;18;01mcontinue[39;00m
+                        real_labels.append(labels[p] [38;5;18;01mif[39;00m p < len(labels) [38;5;18;01melse[39;00m str(p + [38;5;21m1[39m))
+                        page = doc.load_page(p)
+                        [38;5;18;01mfor[39;00m tbl [01min[00m tables_by_page.get(p, []):
+                            chunks.append([38;5;21mf[39m[38;5;21m"[39m[38;5;21m== [39m[38;5;21m{[39mheading[38;5;21m}[39m[38;5;21m ==[39m[38;5;21m\n[39m[38;5;21m{[39mtbl[38;5;21m}[39m[38;5;21m"[39m)
+                            metadata.append({
+                                [38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m: chunk_index,
+                                [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m: heading,
+                                [38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m: filename,
+                                [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m: [real_labels[-[38;5;21m1[39m]]  [38;5;28;03m# Exact page for table[39;00m
+                            })
+                            chunk_index += [38;5;21m1[39m
+                        text, page_words = extract_page_text_with_words(page)
+                        [38;5;18;01mif[39;00m text:  [38;5;28;03m# Skip empty pages[39;00m
+                            pages_text.append(text)
+                            word_page_map.extend(page_words)
+                    section_text = [38;5;21m"[39m[38;5;21m\n[39m[38;5;21m"[39m.join(p [38;5;18;01mfor[39;00m p [01min[00m pages_text [38;5;18;01mif[39;00m p).strip()
+                    [38;5;18;01mif[39;00m section_text:
+                        section_chunks, section_metadata, chunk_index = chunk_section(
+                            section_text, heading, word_page_map, real_labels, filename, max_words, overlap, chunk_index
+                        )
+                        chunks.extend(section_chunks)
+                        metadata.extend(section_metadata)
+            [38;5;18;01melse[39;00m:
+                [38;5;18;01mtry[39;00m:
+                    labels = doc.get_page_labels()
+                [38;5;18;01mexcept[39;00m Exception:
+                    labels = [str(i + [38;5;21m1[39m) [38;5;18;01mfor[39;00m i [01min[00m range(doc.page_count)]
+                [38;5;18;01mfor[39;00m pno [01min[00m range(doc.page_count):
+                    page = doc.load_page(pno)
+                    real_label = labels[pno] [38;5;18;01mif[39;00m pno < len(labels) [38;5;18;01melse[39;00m str(pno + [38;5;21m1[39m)
+                    headings = detect_headings_by_fontsize(page)
+                    page_text, word_page_map = extract_page_text_with_words(page)
+                    [38;5;18;01mfor[39;00m tbl [01min[00m tables_by_page.get(pno, []):
+                        chunks.append([38;5;21mf[39m[38;5;21m"[39m[38;5;21m== No heading ==[39m[38;5;21m\n[39m[38;5;21m{[39mtbl[38;5;21m}[39m[38;5;21m"[39m)
+                        metadata.append({
+                            [38;5;21m"[39m[38;5;21mchunk_index[39m[38;5;21m"[39m: chunk_index,
+                            [38;5;21m"[39m[38;5;21mheading[39m[38;5;21m"[39m: [38;5;21m"[39m[38;5;21mNo heading detected[39m[38;5;21m"[39m,
+                            [38;5;21m"[39m[38;5;21msource_file[39m[38;5;21m"[39m: filename,
+                            [38;5;21m"[39m[38;5;21mpages[39m[38;5;21m"[39m: [real_label]  [38;5;28;03m# Exact page for table[39;00m
+                        })
+                        chunk_index += [38;5;21m1[39m
+                    [38;5;18;01mif[39;00m page_text:  [38;5;28;03m# Skip empty pages[39;00m
+                        [38;5;18;01mif[39;00m headings:
+                            [38;5;18;01mfor[39;00m text, _, _ [01min[00m headings:
+                                section_chunks, section_metadata, chunk_index = chunk_section(
+                                    page_text, text, word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                                )
+                                chunks.extend(section_chunks)
+                                metadata.extend(section_metadata)
+                        [38;5;18;01melse[39;00m:
+                            section_chunks, section_metadata, chunk_index = chunk_section(
+                                page_text, [38;5;21m"[39m[38;5;21mNo heading detected[39m[38;5;21m"[39m, word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                            )
+                            chunks.extend(section_chunks)
+                            metadata.extend(section_metadata)
+
+        [38;5;18;01massert[39;00m len(chunks) == len(metadata), [38;5;21mf[39m[38;5;21m"[39m[38;5;21mMismatch: [39m[38;5;21m{[39mlen(chunks)[38;5;21m}[39m[38;5;21m chunks vs [39m[38;5;21m{[39mlen(metadata)[38;5;21m}[39m[38;5;21m metadata[39m[38;5;21m"[39m
+        [38;5;18;01mreturn[39;00m chunks, metadata
+    [38;5;18;01mexcept[39;00m Exception [38;5;18;01mas[39;00m e:
+        logger.error([38;5;21mf[39m[38;5;21m"[39m[38;5;21mFailed to process PDF [39m[38;5;21m{[39mpdf_path[38;5;21m}[39m[38;5;21m: [39m[38;5;21m{[39me[38;5;21m}[39m[38;5;21m"[39m)
+        [38;5;18;01mraise[39;00m
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Database Handler
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/database.py
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy[38;5;250m [39m[38;5;18;01mimport[39;00m create_engine
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy.ext.declarative[38;5;250m [39m[38;5;18;01mimport[39;00m declarative_base
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy.orm[38;5;250m [39m[38;5;18;01mimport[39;00m sessionmaker
+[38;5;18;01mimport[39;00m[38;5;250m [39mos
+
+DATABASE_URL = os.getenv([38;5;21m"[39m[38;5;21mDATABASE_URL[39m[38;5;21m"[39m, [38;5;21m"[39m[38;5;21msqlite:///./rag.db[39m[38;5;21m"[39m)
+connect_args = {[38;5;21m"[39m[38;5;21mcheck_same_thread[39m[38;5;21m"[39m: [38;5;18;01mFalse[39;00m} [38;5;18;01mif[39;00m DATABASE_URL.startswith([38;5;21m"[39m[38;5;21msqlite[39m[38;5;21m"[39m) [38;5;18;01melse[39;00m {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=[38;5;18;01mFalse[39;00m, autoflush=[38;5;18;01mFalse[39;00m, bind=engine)
+Base = declarative_base()
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Data Models
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/models.py
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy[38;5;250m [39m[38;5;18;01mimport[39;00m Column, Integer, String, ForeignKey
+[38;5;18;01mfrom[39;00m[38;5;250m [39msqlalchemy.orm[38;5;250m [39m[38;5;18;01mimport[39;00m relationship
+[38;5;18;01mfrom[39;00m[38;5;250m [39mdatabase[38;5;250m [39m[38;5;18;01mimport[39;00m Base
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mCourse(Base):
+    __tablename__ = [38;5;21m'[39m[38;5;21mcourses[39m[38;5;21m'[39m
+    id = Column(Integer, primary_key=[38;5;18;01mTrue[39;00m, index=[38;5;18;01mTrue[39;00m)
+    name = Column(String([38;5;21m100[39m), unique=[38;5;18;01mTrue[39;00m, nullable=[38;5;18;01mFalse[39;00m)
+
+    years = relationship([38;5;21m"[39m[38;5;21mYear[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21mcourse[39m[38;5;21m"[39m, cascade=[38;5;21m"[39m[38;5;21mall, delete[39m[38;5;21m"[39m)
+
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mYear(Base):
+    __tablename__ = [38;5;21m'[39m[38;5;21myears[39m[38;5;21m'[39m
+    id = Column(Integer, primary_key=[38;5;18;01mTrue[39;00m, index=[38;5;18;01mTrue[39;00m)
+    name = Column(String([38;5;21m20[39m), nullable=[38;5;18;01mFalse[39;00m)
+    course_id = Column(Integer, ForeignKey([38;5;21m"[39m[38;5;21mcourses.id[39m[38;5;21m"[39m), nullable=[38;5;18;01mFalse[39;00m)
+
+    course = relationship([38;5;21m"[39m[38;5;21mCourse[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21myears[39m[38;5;21m"[39m)
+    semesters = relationship([38;5;21m"[39m[38;5;21mSemester[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21myear[39m[38;5;21m"[39m, cascade=[38;5;21m"[39m[38;5;21mall, delete[39m[38;5;21m"[39m)
+
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mSemester(Base):
+    __tablename__ = [38;5;21m'[39m[38;5;21msemesters[39m[38;5;21m'[39m
+    id = Column(Integer, primary_key=[38;5;18;01mTrue[39;00m, index=[38;5;18;01mTrue[39;00m)
+    name = Column(String([38;5;21m20[39m), nullable=[38;5;18;01mFalse[39;00m)
+    year_id = Column(Integer, ForeignKey([38;5;21m"[39m[38;5;21myears.id[39m[38;5;21m"[39m), nullable=[38;5;18;01mFalse[39;00m)
+
+    year = relationship([38;5;21m"[39m[38;5;21mYear[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21msemesters[39m[38;5;21m"[39m)
+    units = relationship([38;5;21m"[39m[38;5;21mUnit[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21msemester[39m[38;5;21m"[39m, cascade=[38;5;21m"[39m[38;5;21mall, delete[39m[38;5;21m"[39m)
+
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mUnit(Base):
+    __tablename__ = [38;5;21m'[39m[38;5;21munits[39m[38;5;21m'[39m
+    id = Column(Integer, primary_key=[38;5;18;01mTrue[39;00m, index=[38;5;18;01mTrue[39;00m)
+    name = Column(String([38;5;21m100[39m), nullable=[38;5;18;01mFalse[39;00m)
+    semester_id = Column(Integer, ForeignKey([38;5;21m"[39m[38;5;21msemesters.id[39m[38;5;21m"[39m), nullable=[38;5;18;01mFalse[39;00m)
+
+    semester = relationship([38;5;21m"[39m[38;5;21mSemester[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21munits[39m[38;5;21m"[39m)
+    documents = relationship([38;5;21m"[39m[38;5;21mDocument[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21munit[39m[38;5;21m"[39m, cascade=[38;5;21m"[39m[38;5;21mall, delete[39m[38;5;21m"[39m)
+
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mDocument(Base):
+    __tablename__ = [38;5;21m'[39m[38;5;21mdocuments[39m[38;5;21m'[39m
+    id = Column(Integer, primary_key=[38;5;18;01mTrue[39;00m, index=[38;5;18;01mTrue[39;00m)
+    filename = Column(String, nullable=[38;5;18;01mFalse[39;00m)
+    filepath = Column(String, nullable=[38;5;18;01mFalse[39;00m)  [38;5;28;03m# ✅ Make sure this field exists in the DB[39;00m
+    unit_id = Column(Integer, ForeignKey([38;5;21m"[39m[38;5;21munits.id[39m[38;5;21m"[39m), nullable=[38;5;18;01mFalse[39;00m)
+
+    unit = relationship([38;5;21m"[39m[38;5;21mUnit[39m[38;5;21m"[39m, back_populates=[38;5;21m"[39m[38;5;21mdocuments[39m[38;5;21m"[39m)
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 API Schemas
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/schemas.py
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;18;01mfrom[39;00m[38;5;250m [39mpydantic[38;5;250m [39m[38;5;18;01mimport[39;00m BaseModel
+[38;5;18;01mfrom[39;00m[38;5;250m [39mtyping[38;5;250m [39m[38;5;18;01mimport[39;00m List
+
+[38;5;28;03m# =========================[39;00m
+[38;5;28;03m# SHARED INPUT SCHEMAS[39;00m
+[38;5;28;03m# =========================[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mCourseBase(BaseModel):
+    name: str
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mCourseCreate(CourseBase):
+    [38;5;18;01mpass[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mYearBase(BaseModel):
+    name: str
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mYearCreate(YearBase):
+    [38;5;18;01mpass[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mSemesterBase(BaseModel):
+    name: str
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mSemesterCreate(SemesterBase):
+    [38;5;18;01mpass[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mUnitBase(BaseModel):
+    name: str
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mUnitCreate(UnitBase):
+    [38;5;18;01mpass[39;00m
+
+[38;5;28;03m# =========================[39;00m
+[38;5;28;03m# OUTPUT MODELS (NESTED)[39;00m
+[38;5;28;03m# =========================[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mUnit(BaseModel):
+    id: int
+    name: str
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mSemester(BaseModel):
+    id: int
+    name: str
+    units: List[Unit] = []
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mYear(BaseModel):
+    id: int
+    name: str
+    semesters: List[Semester] = []
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mCourse(BaseModel):
+    id: int
+    name: str
+    years: List[Year] = []
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;28;03m# =========================[39;00m
+[38;5;28;03m# FLAT OUTPUTS (FOR LISTING)[39;00m
+[38;5;28;03m# =========================[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mCourseOut(BaseModel):
+    id: int
+    name: str
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mYearOut(BaseModel):
+    id: int
+    name: str
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mSemesterOut(BaseModel):
+    id: int
+    name: str
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mUnitOut(BaseModel):
+    id: int
+    name: str
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;28;03m# =========================[39;00m
+[38;5;28;03m# DOCUMENT SCHEMAS[39;00m
+[38;5;28;03m# =========================[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mDocumentBase(BaseModel):
+    filename: str
+    filepath: str
+    unit_id: int
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mDocument(DocumentBase):
+    id: int
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mDocumentWithPath(BaseModel):
+    id: int
+    filename: str
+    filepath: str
+    course_path: str  [38;5;28;03m# e.g., "CS → Year 1 → Sem 2 → Data Structures"[39;00m
+
+    [38;5;18;01mclass[39;00m[38;5;250m [39mConfig:
+        from_attributes = [38;5;18;01mTrue[39;00m
+
+[38;5;28;03m# =========================[39;00m
+[38;5;28;03m# ASK REQUEST SCHEMA[39;00m
+[38;5;28;03m# =========================[39;00m
+
+[38;5;18;01mclass[39;00m[38;5;250m [39mAskRequest(BaseModel):
+    unit_id: int
+    question: str
+✅ Successfully extracted
+
+
+████████████████████████████████████████
+███████████ FRONTEND CODE ██████████
+████████████████████████████████████████
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Upload Page
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/upload/page.tsx
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;21m"use client"[39m
+
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39museEffect,[38;5;250m [39museState[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"react"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39maxios[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"axios"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mtoast[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"sonner"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mFileUp,[38;5;250m [39mLoader2[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"lucide-react"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mButton[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/ui/button"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mCard,[38;5;250m [39mCardContent,[38;5;250m [39mCardDescription,[38;5;250m [39mCardHeader,[38;5;250m [39mCardTitle[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/ui/card"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mSelect,[38;5;250m [39mSelectContent,[38;5;250m [39mSelectItem,[38;5;250m [39mSelectTrigger,[38;5;250m [39mSelectValue[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/ui/select"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mLabel[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/ui/label"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mPageHeader[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/layout/page-header"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mProgress[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/ui/progress"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mToaster[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"sonner"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39mNavbar[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/navbar"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mSparklesCore[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/sparkles"[39m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mFloatingPaper[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/floating-paper"[39m
+
+[38;5;18;01minterface[39;00m[38;5;250m [39mUnit[38;5;250m [39m{[38;5;250m [39mid:[38;5;250m [39m[38;5;18;01mnumber[39;00m;[38;5;250m [39mname:[38;5;250m [39m[38;5;18;01mstring[39;00m[38;5;250m [39m}
+[38;5;18;01minterface[39;00m[38;5;250m [39mSemester[38;5;250m [39m{[38;5;250m [39mid:[38;5;250m [39m[38;5;18;01mnumber[39;00m;[38;5;250m [39mname:[38;5;250m [39m[38;5;18;01mstring[39;00m;[38;5;250m [39munits:[38;5;250m [39m[38;5;18;01mUnit[39;00m[][38;5;250m [39m}
+[38;5;18;01minterface[39;00m[38;5;250m [39mYear[38;5;250m [39m{[38;5;250m [39mid:[38;5;250m [39m[38;5;18;01mnumber[39;00m;[38;5;250m [39mname:[38;5;250m [39m[38;5;18;01mstring[39;00m;[38;5;250m [39msemesters:[38;5;250m [39m[38;5;18;01mSemester[39;00m[][38;5;250m [39m}
+[38;5;18;01minterface[39;00m[38;5;250m [39mCourse[38;5;250m [39m{[38;5;250m [39mid:[38;5;250m [39m[38;5;18;01mnumber[39;00m;[38;5;250m [39mname:[38;5;250m [39m[38;5;18;01mstring[39;00m;[38;5;250m [39myears:[38;5;250m [39m[38;5;18;01mYear[39;00m[][38;5;250m [39m}
+
+[38;5;18;01mconst[39;00m[38;5;250m [39mAPI_BASE_URL[38;5;250m [39m=[38;5;250m [39mprocess.env.NEXT_PUBLIC_API_BASE_URL[38;5;250m [39m??[38;5;250m [39m[38;5;21m"http://localhost:8000"[39m
+
+[38;5;18;01mexport[39;00m[38;5;250m [39m[38;5;18;01mdefault[39;00m[38;5;250m [39m[38;5;18;01mfunction[39;00m[38;5;250m [39mUploadDocumentPage()[38;5;250m [39m{
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[courses,[38;5;250m [39msetCourses][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mCourse[39;00m[38;5;124;48;5;188m[[39;49m[38;5;124;48;5;188m][39;49m>([])
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedCourseId,[38;5;250m [39msetSelectedCourseId][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mstring[39;00m>([38;5;21m""[39m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedYearId,[38;5;250m [39msetSelectedYearId][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mstring[39;00m>([38;5;21m""[39m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedSemesterId,[38;5;250m [39msetSelectedSemesterId][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mstring[39;00m>([38;5;21m""[39m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedUnitId,[38;5;250m [39msetSelectedUnitId][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mstring[39;00m>([38;5;21m""[39m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[file,[38;5;250m [39msetFile][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mFile[39;00m[38;5;250m [39m[38;5;124;48;5;188m|[39;49m[38;5;250m [39m[38;5;9mnull[39m>([38;5;18;01mnull[39;00m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[isUploading,[38;5;250m [39msetIsUploading][38;5;250m [39m=[38;5;250m [39museState([38;5;18;01mfalse[39;00m)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[uploadProgress,[38;5;250m [39msetUploadProgress][38;5;250m [39m=[38;5;250m [39museState([38;5;21m0[39m)
+
+[38;5;250m  [39m[38;5;28;03m// Get the cascaded objects for selection[39;00m
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mselectedCourse[38;5;250m [39m=[38;5;250m [39mcourses.find(c[38;5;250m [39m=>[38;5;250m [39mc.id.toString()[38;5;250m [39m===[38;5;250m [39mselectedCourseId)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39myears[38;5;250m [39m=[38;5;250m [39mselectedCourse?.years[38;5;250m [39m??[38;5;250m [39m[]
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mselectedYear[38;5;250m [39m=[38;5;250m [39myears.find(y[38;5;250m [39m=>[38;5;250m [39my.id.toString()[38;5;250m [39m===[38;5;250m [39mselectedYearId)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39msemesters[38;5;250m [39m=[38;5;250m [39mselectedYear?.semesters[38;5;250m [39m??[38;5;250m [39m[]
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mselectedSemester[38;5;250m [39m=[38;5;250m [39msemesters.find(s[38;5;250m [39m=>[38;5;250m [39ms.id.toString()[38;5;250m [39m===[38;5;250m [39mselectedSemesterId)
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39munits[38;5;250m [39m=[38;5;250m [39mselectedSemester?.units[38;5;250m [39m??[38;5;250m [39m[]
+
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39m[38;5;28;03m// Fetch all courses + nested[39;00m
+[38;5;250m    [39maxios.get([38;5;21m`[39m[38;5;21m${[39mAPI_BASE_URL[38;5;21m}[39m[38;5;21m/courses/[39m[38;5;21m`[39m)
+[38;5;250m      [39m.then(res[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m        [39msetCourses(res.data)
+[38;5;250m        [39m[38;5;28;03m// console.log("Courses tree:", res.data)[39;00m
+[38;5;250m      [39m})
+[38;5;250m      [39m.[38;5;18;01mcatch[39;00m(err[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m        [39mtoast.error([38;5;21m"Failed to load courses"[39m)
+[38;5;250m        [39mconsole.error([38;5;21m"Error loading courses:"[39m,[38;5;250m [39merr)
+[38;5;250m      [39m})
+[38;5;250m  [39m},[38;5;250m [39m[])
+
+[38;5;250m  [39m[38;5;28;03m// Reset deeper selects when a parent is changed[39;00m
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{[38;5;250m [39msetSelectedYearId([38;5;21m""[39m);[38;5;250m [39msetSelectedSemesterId([38;5;21m""[39m);[38;5;250m [39msetSelectedUnitId([38;5;21m""[39m);[38;5;250m [39m},[38;5;250m [39m[selectedCourseId])
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{[38;5;250m [39msetSelectedSemesterId([38;5;21m""[39m);[38;5;250m [39msetSelectedUnitId([38;5;21m""[39m);[38;5;250m [39m},[38;5;250m [39m[selectedYearId])
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{[38;5;250m [39msetSelectedUnitId([38;5;21m""[39m);[38;5;250m [39m},[38;5;250m [39m[selectedSemesterId])
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mhandleSubmit[38;5;250m [39m=[38;5;250m [39m[38;5;18;01masync[39;00m[38;5;250m [39m(e:[38;5;250m [39m[38;5;18;01mReact.FormEvent[39;00m)[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39me.preventDefault()
+[38;5;250m    [39m[38;5;18;01mif[39;00m[38;5;250m [39m(!selectedUnitId)[38;5;250m [39m[38;5;18;01mreturn[39;00m[38;5;250m [39mtoast.error([38;5;21m"Please select a unit"[39m)
+[38;5;250m    [39m[38;5;18;01mif[39;00m[38;5;250m [39m(!file)[38;5;250m [39m[38;5;18;01mreturn[39;00m[38;5;250m [39mtoast.error([38;5;21m"Please select a file to upload"[39m)
+
+[38;5;250m    [39m[38;5;18;01mconst[39;00m[38;5;250m [39mformData[38;5;250m [39m=[38;5;250m [39m[01mnew[00m[38;5;250m [39mFormData()
+[38;5;250m    [39mformData.append([38;5;21m"file"[39m,[38;5;250m [39mfile)
+[38;5;250m    [39mformData.append([38;5;21m"unit_id"[39m,[38;5;250m [39mselectedUnitId)
+
+[38;5;250m    [39msetIsUploading([38;5;18;01mtrue[39;00m)
+[38;5;250m    [39msetUploadProgress([38;5;21m0[39m)
+[38;5;250m    [39m[38;5;18;01mtry[39;00m[38;5;250m [39m{
+[38;5;250m      [39m[38;5;18;01mconst[39;00m[38;5;250m [39mprogressInterval[38;5;250m [39m=[38;5;250m [39msetInterval(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m        [39msetUploadProgress(prev[38;5;250m [39m=>[38;5;250m [39m(prev[38;5;250m [39m+[38;5;250m [39mMath.random()[38;5;250m [39m*[38;5;250m [39m[38;5;21m15[39m[38;5;250m [39m>[38;5;250m [39m[38;5;21m90[39m[38;5;250m [39m?[38;5;250m [39m90[38;5;250m [39m:[38;5;250m [39m[38;5;18;01mprev[39;00m[38;5;250m [39m+[38;5;250m [39mMath.random()[38;5;250m [39m*[38;5;250m [39m[38;5;21m15[39m))
+[38;5;250m      [39m},[38;5;250m [39m[38;5;21m300[39m)
+[38;5;250m      [39m[38;5;18;01mconst[39;00m[38;5;250m [39mres[38;5;250m [39m=[38;5;250m [39m[38;5;18;01mawait[39;00m[38;5;250m [39maxios.post([38;5;21m`[39m[38;5;21m${[39mAPI_BASE_URL[38;5;21m}[39m[38;5;21m/documents/[39m[38;5;21m`[39m,[38;5;250m [39mformData,[38;5;250m [39m{
+[38;5;250m        [39mheaders:[38;5;250m [39m{[38;5;250m [39m[38;5;21m"Content-Type"[39m:[38;5;250m [39m[38;5;21m"multipart/form-data"[39m[38;5;250m [39m},
+[38;5;250m      [39m})
+[38;5;250m      [39mclearInterval(progressInterval)
+[38;5;250m      [39msetUploadProgress([38;5;21m100[39m)
+[38;5;250m      [39m[38;5;18;01mif[39;00m[38;5;250m [39m(res.status[38;5;250m [39m===[38;5;250m [39m[38;5;21m200[39m[38;5;250m [39m||[38;5;250m [39mres.status[38;5;250m [39m===[38;5;250m [39m[38;5;21m201[39m)[38;5;250m [39m{
+[38;5;250m        [39mtoast.success([38;5;21m"Document uploaded successfully"[39m)
+[38;5;250m        [39msetFile([38;5;18;01mnull[39;00m)
+[38;5;250m        [39m[38;5;18;01mconst[39;00m[38;5;250m [39mfileInput[38;5;250m [39m=[38;5;250m [39mdocument.getElementById([38;5;21m"file-upload"[39m)[38;5;250m [39m[38;5;18;01mas[39;00m[38;5;250m [39mHTMLInputElement
+[38;5;250m        [39m[38;5;18;01mif[39;00m[38;5;250m [39m(fileInput)[38;5;250m [39mfileInput.value[38;5;250m [39m=[38;5;250m [39m[38;5;21m""[39m
+[38;5;250m      [39m}
+[38;5;250m    [39m}[38;5;250m [39m[38;5;18;01mcatch[39;00m[38;5;250m [39m(error)[38;5;250m [39m{
+[38;5;250m      [39mtoast.error([38;5;21m"Upload failed. Please try again."[39m)
+[38;5;250m      [39mconsole.error([38;5;21m"Upload failed:"[39m,[38;5;250m [39merror)
+[38;5;250m    [39m}[38;5;250m [39m[38;5;18;01mfinally[39;00m[38;5;250m [39m{
+[38;5;250m      [39msetTimeout(()[38;5;250m [39m=>[38;5;250m [39m{[38;5;250m [39msetIsUploading([38;5;18;01mfalse[39;00m);[38;5;250m [39msetUploadProgress([38;5;21m0[39m)[38;5;250m [39m},[38;5;250m [39m[38;5;21m1000[39m)
+[38;5;250m    [39m}
+[38;5;250m  [39m}
+
+[38;5;250m  [39m[38;5;18;01mreturn[39;00m[38;5;250m [39m(
+[38;5;250m    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"min-h-screen flex flex-col bg-black/[0.96] text-white antialiased bg-grid-white/[0.02] relative overflow-hidden"[39m>
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"h-full w-full absolute inset-0 z-0"[39m>
+[38;5;250m        [39m<[38;5;18;01mSparklesCore[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"tsparticlesfullpage"[39m[38;5;250m [39m[38;5;9mbackground[39m=[38;5;21m"transparent"[39m[38;5;250m [39m[38;5;9mminSize[39m={[38;5;21m0.6[39m}[38;5;250m [39m[38;5;9mmaxSize[39m={[38;5;21m1.4[39m}[38;5;250m [39m[38;5;9mparticleDensity[39m={[38;5;21m100[39m}[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"w-full h-full"[39m[38;5;250m [39m[38;5;9mparticleColor[39m=[38;5;21m"#FFFFFF"[39m[38;5;250m [39m/>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"absolute inset-0 overflow-hidden z-0"[39m>
+[38;5;250m        [39m<[38;5;18;01mFloatingPaper[39;00m[38;5;250m [39m[38;5;9mcount[39m={[38;5;21m4[39m}[38;5;250m [39m/>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"relative z-10"[39m>
+[38;5;250m        [39m<[38;5;18;01mNavbar[39;00m[38;5;250m [39m/>
+[38;5;250m        [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"container mx-auto p-6"[39m>
+[38;5;250m          [39m<[38;5;18;01mPageHeader[39;00m[38;5;250m [39m[38;5;9mtitle[39m=[38;5;21m"Upload Document"[39m[38;5;250m [39m[38;5;9micon[39m={<[38;5;18;01mFileUp[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"h-6 w-6"[39m[38;5;250m [39m/>}[38;5;250m [39m[38;5;9mdescription[39m=[38;5;21m"Upload documents to specific courses, years, semesters, and units"[39m[38;5;250m [39m/>
+[38;5;250m          [39m<[38;5;18;01mCard[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"max-w-2xl mx-auto bg-white/5 backdrop-blur-sm border-white/10"[39m>
+[38;5;250m            [39m<[38;5;18;01mCardHeader[39;00m>
+[38;5;250m              [39m<[38;5;18;01mCardTitle[39;00m>Document[38;5;250m [39mUpload</[38;5;18;01mCardTitle[39;00m>
+[38;5;250m              [39m<[38;5;18;01mCardDescription[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-gray-400"[39m>Select[38;5;250m [39mthe[38;5;250m [39mcourse[38;5;250m [39mhierarchy[38;5;250m [39mand[38;5;250m [39mchoose[38;5;250m [39ma[38;5;250m [39mfile[38;5;250m [39mto[38;5;250m [39mupload</[38;5;18;01mCardDescription[39;00m>
+[38;5;250m            [39m</[38;5;18;01mCardHeader[39;00m>
+[38;5;250m            [39m<[38;5;18;01mCardContent[39;00m>
+[38;5;250m              [39m<[38;5;18;01mform[39;00m[38;5;250m [39m[38;5;9monSubmit[39m={handleSubmit}[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"space-y-6"[39m>
+[38;5;250m                [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"space-y-4"[39m>
+[38;5;250m                  [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"grid gap-2"[39m>
+[38;5;250m                    [39m<[38;5;18;01mLabel[39;00m[38;5;250m [39m[38;5;9mhtmlFor[39m=[38;5;21m"course"[39m>Course</[38;5;18;01mLabel[39;00m>
+[38;5;250m                    [39m<[38;5;18;01mSelect[39;00m[38;5;250m [39m[38;5;9mvalue[39m={selectedCourseId}[38;5;250m [39m[38;5;9monValueChange[39m={setSelectedCourseId}>
+[38;5;250m                      [39m<[38;5;18;01mSelectTrigger[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"course"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-white/5 border-white/20"[39m>
+[38;5;250m                        [39m<[38;5;18;01mSelectValue[39;00m[38;5;250m [39m[38;5;9mplaceholder[39m=[38;5;21m"Select a course"[39m[38;5;250m [39m/>
+[38;5;250m                      [39m</[38;5;18;01mSelectTrigger[39;00m>
+[38;5;250m                      [39m<[38;5;18;01mSelectContent[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-gray-900 border-white/20"[39m>
+[38;5;250m                        [39m{courses.length[38;5;250m [39m===[38;5;250m [39m[38;5;21m0[39m[38;5;250m [39m?[38;5;250m [39m(
+[38;5;250m                          [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"p-2 text-gray-400"[39m>No[38;5;250m [39mcourses[38;5;250m [39mfound</[38;5;18;01mdiv[39;00m>
+[38;5;250m                        [39m)[38;5;250m [39m:[38;5;250m [39m(
+[38;5;250m                          [39mcourses.map(course[38;5;250m [39m=>[38;5;250m [39m(
+[38;5;250m                            [39m<[38;5;18;01mSelectItem[39;00m[38;5;250m [39m[38;5;9mkey[39m={course.id}[38;5;250m [39m[38;5;9mvalue[39m={course.id.toString()}>{course.name}</[38;5;18;01mSelectItem[39;00m>
+[38;5;250m                          [39m))
+[38;5;250m                        [39m)}
+[38;5;250m                      [39m</[38;5;18;01mSelectContent[39;00m>
+[38;5;250m                    [39m</[38;5;18;01mSelect[39;00m>
+[38;5;250m                  [39m</[38;5;18;01mdiv[39;00m>
+
+[38;5;250m                  [39m{years.length[38;5;250m [39m>[38;5;250m [39m[38;5;21m0[39m[38;5;250m [39m&&[38;5;250m [39m(
+[38;5;250m                    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"grid gap-2"[39m>
+[38;5;250m                      [39m<[38;5;18;01mLabel[39;00m[38;5;250m [39m[38;5;9mhtmlFor[39m=[38;5;21m"year"[39m>Year</[38;5;18;01mLabel[39;00m>
+[38;5;250m                      [39m<[38;5;18;01mSelect[39;00m[38;5;250m [39m[38;5;9mvalue[39m={selectedYearId}[38;5;250m [39m[38;5;9monValueChange[39m={setSelectedYearId}>
+[38;5;250m                        [39m<[38;5;18;01mSelectTrigger[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"year"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-white/5 border-white/20"[39m>
+[38;5;250m                          [39m<[38;5;18;01mSelectValue[39;00m[38;5;250m [39m[38;5;9mplaceholder[39m=[38;5;21m"Select a year"[39m[38;5;250m [39m/>
+[38;5;250m                        [39m</[38;5;18;01mSelectTrigger[39;00m>
+[38;5;250m                        [39m<[38;5;18;01mSelectContent[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-gray-900 border-white/20"[39m>
+[38;5;250m                          [39m{years.map(year[38;5;250m [39m=>[38;5;250m [39m(
+[38;5;250m                            [39m<[38;5;18;01mSelectItem[39;00m[38;5;250m [39m[38;5;9mkey[39m={year.id}[38;5;250m [39m[38;5;9mvalue[39m={year.id.toString()}>{year.name}</[38;5;18;01mSelectItem[39;00m>
+[38;5;250m                          [39m))}
+[38;5;250m                        [39m</[38;5;18;01mSelectContent[39;00m>
+[38;5;250m                      [39m</[38;5;18;01mSelect[39;00m>
+[38;5;250m                    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                  [39m)}
+
+[38;5;250m                  [39m{semesters.length[38;5;250m [39m>[38;5;250m [39m[38;5;21m0[39m[38;5;250m [39m&&[38;5;250m [39m(
+[38;5;250m                    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"grid gap-2"[39m>
+[38;5;250m                      [39m<[38;5;18;01mLabel[39;00m[38;5;250m [39m[38;5;9mhtmlFor[39m=[38;5;21m"semester"[39m>Semester</[38;5;18;01mLabel[39;00m>
+[38;5;250m                      [39m<[38;5;18;01mSelect[39;00m[38;5;250m [39m[38;5;9mvalue[39m={selectedSemesterId}[38;5;250m [39m[38;5;9monValueChange[39m={setSelectedSemesterId}>
+[38;5;250m                        [39m<[38;5;18;01mSelectTrigger[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"semester"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-white/5 border-white/20"[39m>
+[38;5;250m                          [39m<[38;5;18;01mSelectValue[39;00m[38;5;250m [39m[38;5;9mplaceholder[39m=[38;5;21m"Select a semester"[39m[38;5;250m [39m/>
+[38;5;250m                        [39m</[38;5;18;01mSelectTrigger[39;00m>
+[38;5;250m                        [39m<[38;5;18;01mSelectContent[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-gray-900 border-white/20"[39m>
+[38;5;250m                          [39m{semesters.map(semester[38;5;250m [39m=>[38;5;250m [39m(
+[38;5;250m                            [39m<[38;5;18;01mSelectItem[39;00m[38;5;250m [39m[38;5;9mkey[39m={semester.id}[38;5;250m [39m[38;5;9mvalue[39m={semester.id.toString()}>{semester.name}</[38;5;18;01mSelectItem[39;00m>
+[38;5;250m                          [39m))}
+[38;5;250m                        [39m</[38;5;18;01mSelectContent[39;00m>
+[38;5;250m                      [39m</[38;5;18;01mSelect[39;00m>
+[38;5;250m                    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                  [39m)}
+
+[38;5;250m                  [39m{units.length[38;5;250m [39m>[38;5;250m [39m[38;5;21m0[39m[38;5;250m [39m&&[38;5;250m [39m(
+[38;5;250m                    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"grid gap-2"[39m>
+[38;5;250m                      [39m<[38;5;18;01mLabel[39;00m[38;5;250m [39m[38;5;9mhtmlFor[39m=[38;5;21m"unit"[39m>Unit</[38;5;18;01mLabel[39;00m>
+[38;5;250m                      [39m<[38;5;18;01mSelect[39;00m[38;5;250m [39m[38;5;9mvalue[39m={selectedUnitId}[38;5;250m [39m[38;5;9monValueChange[39m={setSelectedUnitId}>
+[38;5;250m                        [39m<[38;5;18;01mSelectTrigger[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"unit"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-white/5 border-white/20"[39m>
+[38;5;250m                          [39m<[38;5;18;01mSelectValue[39;00m[38;5;250m [39m[38;5;9mplaceholder[39m=[38;5;21m"Select a unit"[39m[38;5;250m [39m/>
+[38;5;250m                        [39m</[38;5;18;01mSelectTrigger[39;00m>
+[38;5;250m                        [39m<[38;5;18;01mSelectContent[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"bg-gray-900 border-white/20"[39m>
+[38;5;250m                          [39m{units.map(unit[38;5;250m [39m=>[38;5;250m [39m(
+[38;5;250m                            [39m<[38;5;18;01mSelectItem[39;00m[38;5;250m [39m[38;5;9mkey[39m={unit.id}[38;5;250m [39m[38;5;9mvalue[39m={unit.id.toString()}>{unit.name}</[38;5;18;01mSelectItem[39;00m>
+[38;5;250m                          [39m))}
+[38;5;250m                        [39m</[38;5;18;01mSelectContent[39;00m>
+[38;5;250m                      [39m</[38;5;18;01mSelect[39;00m>
+[38;5;250m                    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                  [39m)}
+
+[38;5;250m                  [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"grid gap-2"[39m>
+[38;5;250m                    [39m<[38;5;18;01mLabel[39;00m[38;5;250m [39m[38;5;9mhtmlFor[39m=[38;5;21m"file-upload"[39m>Document</[38;5;18;01mLabel[39;00m>
+[38;5;250m                    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"border border-white/20 rounded-md p-2 bg-white/5"[39m>
+[38;5;250m                      [39m<[38;5;18;01minput[39;00m[38;5;250m [39m[38;5;9mid[39m=[38;5;21m"file-upload"[39m[38;5;250m [39m[38;5;9mtype[39m=[38;5;21m"file"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"w-full text-gray-400"[39m[38;5;250m [39m[38;5;9monChange[39m={e[38;5;250m [39m=>[38;5;250m [39msetFile(e.target.files?.[[38;5;21m0[39m][38;5;250m [39m||[38;5;250m [39m[38;5;18;01mnull[39;00m)}[38;5;250m [39m[38;5;9mdisabled[39m={isUploading}[38;5;250m [39m/>
+[38;5;250m                    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                    [39m{file[38;5;250m [39m&&[38;5;250m [39m(
+[38;5;250m                      [39m<[38;5;18;01mp[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-sm text-gray-400"[39m>Selected[38;5;250m [39mfile:[38;5;250m [39m{file.name}[38;5;250m [39m({(file.size[38;5;250m [39m/[38;5;250m [39m[38;5;21m1024[39m).toFixed([38;5;21m2[39m)}[38;5;250m [39mKB)</[38;5;18;01mp[39;00m>
+[38;5;250m                    [39m)}
+[38;5;250m                  [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                [39m</[38;5;18;01mdiv[39;00m>
+
+[38;5;250m                [39m{isUploading[38;5;250m [39m&&[38;5;250m [39m(
+[38;5;250m                  [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"space-y-2"[39m>
+[38;5;250m                    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"flex items-center justify-between"[39m>
+[38;5;250m                      [39m<[38;5;18;01mspan[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-sm text-gray-400"[39m>Uploading...</[38;5;18;01mspan[39;00m>
+[38;5;250m                      [39m<[38;5;18;01mspan[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-sm font-medium"[39m>{Math.round(uploadProgress)}%</[38;5;18;01mspan[39;00m>
+[38;5;250m                    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                    [39m<[38;5;18;01mProgress[39;00m[38;5;250m [39m[38;5;9mvalue[39m={uploadProgress}[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"h-2 bg-white/10"[39m[38;5;250m [39m[38;5;9mindicatorClassName[39m=[38;5;21m"bg-purple-600"[39m[38;5;250m [39m/>
+[38;5;250m                  [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m                [39m)}
+
+[38;5;250m                [39m<[38;5;18;01mButton[39;00m[38;5;250m [39m[38;5;9mtype[39m=[38;5;21m"submit"[39m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"w-full bg-purple-600 hover:bg-purple-700 text-white"[39m[38;5;250m [39m[38;5;9mdisabled[39m={isUploading}>
+[38;5;250m                  [39m{isUploading[38;5;250m [39m?[38;5;250m [39m(
+[38;5;250m                    [39m<>
+[38;5;250m                      [39m<[38;5;18;01mLoader2[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"mr-2 h-4 w-4 animate-spin"[39m[38;5;250m [39m/>
+[38;5;250m                      [39mUploading...
+[38;5;250m                    [39m</>
+[38;5;250m                  [39m)[38;5;250m [39m:[38;5;250m [39m(
+[38;5;250m                    [39m<>
+[38;5;250m                      [39m<[38;5;18;01mFileUp[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"mr-2 h-4 w-4"[39m[38;5;250m [39m/>
+[38;5;250m                      [39mUpload[38;5;250m [39mDocument
+[38;5;250m                    [39m</>
+[38;5;250m                  [39m)}
+[38;5;250m                [39m</[38;5;18;01mButton[39;00m>
+[38;5;250m              [39m</[38;5;18;01mform[39;00m>
+[38;5;250m            [39m</[38;5;18;01mCardContent[39;00m>
+[38;5;250m          [39m</[38;5;18;01mCard[39;00m>
+[38;5;250m          [39m<[38;5;18;01mToaster[39;00m[38;5;250m [39m/>
+[38;5;250m        [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m  [39m)
+}
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Ask Page
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/ask/page.tsx
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;28;03m// app/ask/page.tsx[39;00m
+
+[38;5;21m"use client"[39m;
+
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39museState,[38;5;250m [39museEffect[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"react"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39mNavbar[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/navbar"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mSparklesCore[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/sparkles"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39mChatSidebar[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/chat/chat-sidebar"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39mChatWindow[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/chat/chat-window"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39mPDFPreviewPanel[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/pdf-preview-panel"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39mUnitSelector[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/components/chat/unit-selector"[39m;[38;5;250m [39m[38;5;28;03m// (only used if you kept the top selector)[39;00m
+[38;5;18;01mimport[39;00m[38;5;250m [39m{[38;5;250m [39mtoast,[38;5;250m [39mToaster[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"sonner"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39maxios[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"axios"[39m;
+[38;5;18;01mimport[39;00m[38;5;250m [39m[38;5;18;01mtype[39;00m[38;5;250m [39m{[38;5;250m [39mChatSession,[38;5;250m [39mChatMessage[38;5;250m [39m}[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"@/types/chat"[39m;
+
+[38;5;18;01mconst[39;00m[38;5;250m [39mAPI_BASE_URL[38;5;250m [39m=
+[38;5;250m  [39mprocess.env.NEXT_PUBLIC_API_BASE_URL[38;5;250m [39m??[38;5;250m [39m[38;5;21m"http://localhost:8000"[39m;
+
+[38;5;18;01minterface[39;00m[38;5;250m [39mDocumentWithPath[38;5;250m [39m{
+[38;5;250m  [39mid:[38;5;250m [39m[38;5;18;01mnumber[39;00m;
+[38;5;250m  [39mfilename:[38;5;250m [39m[38;5;18;01mstring[39;00m;
+[38;5;250m  [39mfilepath:[38;5;250m [39m[38;5;18;01mstring[39;00m;
+[38;5;250m  [39mcourse_path:[38;5;250m [39m[38;5;18;01mstring[39;00m;
+}
+
+[38;5;18;01mexport[39;00m[38;5;250m [39m[38;5;18;01mdefault[39;00m[38;5;250m [39m[38;5;18;01mfunction[39;00m[38;5;250m [39mAskQuestionPage()[38;5;250m [39m{
+[38;5;250m  [39m[38;5;28;03m// chat[39;00m
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[chatSessions,[38;5;250m [39msetChatSessions][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mChatSession[39;00m[38;5;124;48;5;188m[[39;49m[38;5;124;48;5;188m][39;49m>([]);
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[currentSessionId,[38;5;250m [39msetCurrentSessionId][38;5;250m [39m=
+[38;5;250m    [39museState<[38;5;18;01mstring[39;00m[38;5;250m [39m[38;5;124;48;5;188m|[39;49m[38;5;250m [39m[38;5;9mnull[39m>([38;5;18;01mnull[39;00m);
+
+[38;5;250m  [39m[38;5;28;03m// unit & pdf state[39;00m
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedUnit,[38;5;250m [39msetSelectedUnit][38;5;250m [39m=[38;5;250m [39museState<{
+[38;5;250m    [39munitId:[38;5;250m [39m[38;5;18;01mnumber[39;00m;
+[38;5;250m    [39munitName:[38;5;250m [39m[38;5;18;01mstring[39;00m;
+[38;5;250m    [39mcoursePath:[38;5;250m [39m[38;5;18;01mstring[39;00m;
+[38;5;250m  [39m}[38;5;250m [39m|[38;5;250m [39m[38;5;18;01mnull[39;00m>([38;5;18;01mnull[39;00m);
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[unitPdfs,[38;5;250m [39msetUnitPdfs][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mDocumentWithPath[39;00m[38;5;124;48;5;188m[[39;49m[38;5;124;48;5;188m][39;49m>([]);
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39m[selectedPdfId,[38;5;250m [39msetSelectedPdfId][38;5;250m [39m=[38;5;250m [39museState<[38;5;18;01mnumber[39;00m[38;5;250m [39m[38;5;124;48;5;188m|[39;49m[38;5;250m [39m[38;5;9mnull[39m>([38;5;18;01mnull[39;00m);
+
+[38;5;250m  [39m[38;5;28;03m// load / save sessions[39;00m
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39m[38;5;18;01mconst[39;00m[38;5;250m [39mraw[38;5;250m [39m=[38;5;250m [39mlocalStorage.getItem([38;5;21m"chatSessions"[39m);
+[38;5;250m    [39m[38;5;18;01mif[39;00m[38;5;250m [39m(raw)[38;5;250m [39m{
+[38;5;250m      [39m[38;5;18;01mtry[39;00m[38;5;250m [39m{
+[38;5;250m        [39m[38;5;18;01mconst[39;00m[38;5;250m [39msessions[38;5;250m [39m=[38;5;250m [39mJSON.parse(raw);
+[38;5;250m        [39msetChatSessions(
+[38;5;250m          [39msessions.map((s:[38;5;250m [39m[38;5;18;01many[39;00m)[38;5;250m [39m=>[38;5;250m [39m({
+[38;5;250m            [39m...s,
+[38;5;250m            [39mtimestamp:[38;5;250m [39m[38;5;18;01mnew[39;00m[38;5;250m [39mDate(s.timestamp),
+[38;5;250m            [39mmessages:[38;5;250m [39m[38;5;18;01ms.messages.map[39;00m((m:[38;5;250m [39m[38;5;18;01many[39;00m)[38;5;250m [39m=>[38;5;250m [39m({
+[38;5;250m              [39m...m,
+[38;5;250m              [39mtimestamp:[38;5;250m [39m[38;5;18;01mnew[39;00m[38;5;250m [39mDate(m.timestamp),
+[38;5;250m            [39m})),
+[38;5;250m          [39m}))
+[38;5;250m        [39m);
+[38;5;250m      [39m}[38;5;250m [39m[38;5;18;01mcatch[39;00m[38;5;250m [39m{}
+[38;5;250m    [39m}
+[38;5;250m  [39m},[38;5;250m [39m[]);
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39mlocalStorage.setItem([38;5;21m"chatSessions"[39m,[38;5;250m [39mJSON.stringify(chatSessions));
+[38;5;250m  [39m},[38;5;250m [39m[chatSessions]);
+
+[38;5;250m  [39m[38;5;28;03m// fetch PDFs on unit change[39;00m
+[38;5;250m  [39museEffect(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39m[38;5;18;01mif[39;00m[38;5;250m [39m(!selectedUnit)[38;5;250m [39m{
+[38;5;250m      [39msetUnitPdfs([]);
+[38;5;250m      [39msetSelectedPdfId([38;5;18;01mnull[39;00m);
+[38;5;250m      [39m[38;5;18;01mreturn[39;00m;
+[38;5;250m    [39m}
+[38;5;250m    [39maxios
+[38;5;250m      [39m.get<[38;5;18;01mDocumentWithPath[39;00m[38;5;124;48;5;188m[[39;49m[38;5;124;48;5;188m][39;49m>(
+[38;5;250m        [39m[38;5;21m`[39m[38;5;21m${[39mAPI_BASE_URL[38;5;21m}[39m[38;5;21m/units/[39m[38;5;21m${[39mselectedUnit.unitId[38;5;21m}[39m[38;5;21m/documents/[39m[38;5;21m`[39m
+[38;5;250m      [39m)
+[38;5;250m      [39m.then((res)[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m        [39msetUnitPdfs(res.data);
+[38;5;250m        [39msetSelectedPdfId(res.data.length[38;5;250m [39m?[38;5;250m [39mres.data[[38;5;21m0[39m].id[38;5;250m [39m:[38;5;250m [39m[38;5;18;01mnull[39;00m);
+[38;5;250m      [39m})
+[38;5;250m      [39m.[38;5;18;01mcatch[39;00m(()[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m        [39mtoast.error([38;5;21m"Could not load PDFs for that unit"[39m);
+[38;5;250m        [39msetUnitPdfs([]);
+[38;5;250m        [39msetSelectedPdfId([38;5;18;01mnull[39;00m);
+[38;5;250m      [39m});
+[38;5;250m  [39m},[38;5;250m [39m[selectedUnit]);
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mgetPdfUrl[38;5;250m [39m=[38;5;250m [39m(id:[38;5;250m [39m[38;5;18;01mnumber[39;00m[38;5;250m [39m|[38;5;250m [39m[38;5;18;01mnull[39;00m)[38;5;250m [39m=>
+[38;5;250m    [39mid[38;5;250m [39m?[38;5;250m [39m[38;5;21m`[39m[38;5;21m${[39mAPI_BASE_URL[38;5;21m}[39m[38;5;21m/documents/download/[39m[38;5;21m${[39mid[38;5;21m}[39m[38;5;21m`[39m[38;5;250m [39m:[38;5;250m [39m[38;5;18;01mnull[39;00m;
+
+[38;5;250m  [39m[38;5;28;03m// chat helpers[39;00m
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mgetCurrentSession[38;5;250m [39m=[38;5;250m [39m()[38;5;250m [39m=>
+[38;5;250m    [39mchatSessions.find((s)[38;5;250m [39m=>[38;5;250m [39ms.id[38;5;250m [39m===[38;5;250m [39mcurrentSessionId)[38;5;250m [39m||[38;5;250m [39m[38;5;18;01mnull[39;00m;
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mcreateNewSession[38;5;250m [39m=[38;5;250m [39m(
+[38;5;250m    [39munitId:[38;5;250m [39m[38;5;18;01mnumber[39;00m,
+[38;5;250m    [39munitName:[38;5;250m [39m[38;5;18;01mstring[39;00m,
+[38;5;250m    [39mcoursePath:[38;5;250m [39m[38;5;18;01mstring[39;00m
+[38;5;250m  [39m)[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39m[38;5;18;01mconst[39;00m[38;5;250m [39mid[38;5;250m [39m=[38;5;250m [39mDate.now().toString();
+[38;5;250m    [39m[38;5;18;01mconst[39;00m[38;5;250m [39mnewSess:[38;5;250m [39m[38;5;18;01mChatSession[39;00m[38;5;250m [39m=[38;5;250m [39m{
+[38;5;250m      [39mid,
+[38;5;250m      [39munitId,
+[38;5;250m      [39munitName,
+[38;5;250m      [39mcoursePath,
+[38;5;250m      [39mmessages:[38;5;250m [39m[],
+[38;5;250m      [39mtimestamp:[38;5;250m [39m[38;5;18;01mnew[39;00m[38;5;250m [39mDate(),
+[38;5;250m    [39m};
+[38;5;250m    [39msetChatSessions((prev)[38;5;250m [39m=>[38;5;250m [39m[newSess,[38;5;250m [39m...prev]);
+[38;5;250m    [39msetCurrentSessionId(id);
+[38;5;250m    [39m[38;5;18;01mreturn[39;00m[38;5;250m [39mid;
+[38;5;250m  [39m};
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39maddMessage[38;5;250m [39m=[38;5;250m [39m(sid:[38;5;250m [39m[38;5;18;01mstring[39;00m,[38;5;250m [39mmsg:[38;5;250m [39m[38;5;18;01mChatMessage[39;00m)[38;5;250m [39m=>
+[38;5;250m    [39msetChatSessions((prev)[38;5;250m [39m=>
+[38;5;250m      [39mprev.map((s)[38;5;250m [39m=>
+[38;5;250m        [39ms.id[38;5;250m [39m===[38;5;250m [39msid[38;5;250m [39m?[38;5;250m [39m{[38;5;250m [39m...s,[38;5;250m [39mmessages:[38;5;250m [39m[...s.messages,[38;5;250m [39mmsg][38;5;250m [39m}[38;5;250m [39m:[38;5;250m [39ms
+[38;5;250m      [39m)
+[38;5;250m    [39m);
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mupdateMessage[38;5;250m [39m=[38;5;250m [39m(
+[38;5;250m    [39msid:[38;5;250m [39m[38;5;18;01mstring[39;00m,
+[38;5;250m    [39mmid:[38;5;250m [39m[38;5;18;01mstring[39;00m,
+[38;5;250m    [39mupdates:[38;5;250m [39m[38;5;18;01mPartial[39;00m<[38;5;18;01mChatMessage[39;00m>
+[38;5;250m  [39m)[38;5;250m [39m=>
+[38;5;250m    [39msetChatSessions((prev)[38;5;250m [39m=>
+[38;5;250m      [39mprev.map((s)[38;5;250m [39m=>
+[38;5;250m        [39ms.id[38;5;250m [39m===[38;5;250m [39msid
+[38;5;250m          [39m?[38;5;250m [39m{
+[38;5;250m              [39m...s,
+[38;5;250m              [39mmessages:[38;5;250m [39m[38;5;18;01ms.messages.map[39;00m((m)[38;5;250m [39m=>
+[38;5;250m                [39mm.id[38;5;250m [39m===[38;5;250m [39mmid[38;5;250m [39m?[38;5;250m [39m{[38;5;250m [39m...m,[38;5;250m [39m...updates[38;5;250m [39m}[38;5;250m [39m:[38;5;250m [39mm
+[38;5;250m              [39m),
+[38;5;250m            [39m}
+[38;5;250m          [39m:[38;5;250m [39ms
+[38;5;250m      [39m)
+[38;5;250m    [39m);
+
+[38;5;250m  [39m[38;5;18;01mconst[39;00m[38;5;250m [39mdeleteSession[38;5;250m [39m=[38;5;250m [39m(sid:[38;5;250m [39m[38;5;18;01mstring[39;00m)[38;5;250m [39m=>[38;5;250m [39m{
+[38;5;250m    [39msetChatSessions((prev)[38;5;250m [39m=>[38;5;250m [39mprev.filter((s)[38;5;250m [39m=>[38;5;250m [39ms.id[38;5;250m [39m!==[38;5;250m [39msid));
+[38;5;250m    [39m[38;5;18;01mif[39;00m[38;5;250m [39m(currentSessionId[38;5;250m [39m===[38;5;250m [39msid)[38;5;250m [39msetCurrentSessionId([38;5;18;01mnull[39;00m);
+[38;5;250m    [39mtoast.success([38;5;21m"Chat session deleted"[39m);
+[38;5;250m  [39m};
+
+[38;5;250m  [39m[38;5;18;01mreturn[39;00m[38;5;250m [39m(
+[38;5;250m    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"min-h-screen flex flex-col bg-black/[0.96] text-white relative overflow-hidden"[39m>
+[38;5;250m      [39m{[38;5;28;03m/* Background sparkles */[39;00m}
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"absolute inset-0 z-0"[39m>
+[38;5;250m        [39m<[38;5;18;01mSparklesCore[39;00m
+[38;5;250m          [39m[38;5;9mid[39m=[38;5;21m"tsparticlesfullpage"[39m
+[38;5;250m          [39m[38;5;9mbackground[39m=[38;5;21m"transparent"[39m
+[38;5;250m          [39m[38;5;9mminSize[39m={[38;5;21m0.4[39m}
+[38;5;250m          [39m[38;5;9mmaxSize[39m={[38;5;21m1.0[39m}
+[38;5;250m          [39m[38;5;9mparticleDensity[39m={[38;5;21m50[39m}
+[38;5;250m          [39m[38;5;9mclassName[39m=[38;5;21m"w-full h-full"[39m
+[38;5;250m          [39m[38;5;9mparticleColor[39m=[38;5;21m"#FFFFFF"[39m
+[38;5;250m        [39m/>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"relative z-10 flex flex-col h-screen"[39m>
+[38;5;250m        [39m<[38;5;18;01mNavbar[39;00m[38;5;250m [39m/>
+
+[38;5;250m        [39m{[38;5;28;03m/* three‐column grid */[39;00m}
+[38;5;250m        [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"flex flex-1 overflow-hidden"[39m>
+[38;5;250m          [39m{[38;5;28;03m/* ← sidebar */[39;00m}
+[38;5;250m          [39m<[38;5;18;01mChatSidebar[39;00m
+[38;5;250m            [39m[38;5;9msessions[39m={chatSessions}
+[38;5;250m            [39m[38;5;9mcurrentSessionId[39m={currentSessionId}
+[38;5;250m            [39m[38;5;9monSelectSession[39m={setCurrentSessionId}
+[38;5;250m            [39m[38;5;9monDeleteSession[39m={deleteSession}
+[38;5;250m            [39m[38;5;9monNewSession[39m={()[38;5;250m [39m=>[38;5;250m [39msetCurrentSessionId([38;5;18;01mnull[39;00m)}
+[38;5;250m          [39m/>
+
+[38;5;250m          [39m{[38;5;28;03m/* ↔ center: chat + bottom controls */[39;00m}
+[38;5;250m          [39m<[38;5;18;01mChatWindow[39;00m
+[38;5;250m            [39m[38;5;9mcurrentSession[39m={getCurrentSession()}
+[38;5;250m            [39m[38;5;9monCreateSession[39m={createNewSession}
+[38;5;250m            [39m[38;5;9monAddMessage[39m={addMessage}
+[38;5;250m            [39m[38;5;9monUpdateMessage[39m={updateMessage}
+
+[38;5;250m            [39m[38;5;124;48;5;188m/[39;49m[38;5;124;48;5;188m*[39;49m[38;5;124;48;5;188m*[39;49m[38;5;250m [39m[38;5;124;48;5;188m←[39;49m[38;5;250m [39m[38;5;9mthese[39m[38;5;250m [39m[38;5;9mfive[39m[38;5;250m [39m[38;5;9mare[39m[38;5;250m [39m[38;5;124;48;5;188m*[39;49m[38;5;9mrequired[39m[38;5;124;48;5;188m*[39;49m[38;5;250m [39m[38;5;124;48;5;188m*[39;49m[38;5;124;48;5;188m*[39;49m[38;5;124;48;5;188m/[39;49m
+[38;5;250m            [39m[38;5;9mselectedUnit[39m={selectedUnit}
+[38;5;250m            [39m[38;5;9monUnitSelect[39m={setSelectedUnit}
+[38;5;250m            [39m[38;5;9munitPdfs[39m={unitPdfs}
+[38;5;250m            [39m[38;5;9mselectedPdfId[39m={selectedPdfId}
+[38;5;250m            [39m[38;5;9monPdfSelect[39m={setSelectedPdfId}
+[38;5;250m          [39m/>
+
+[38;5;250m          [39m{[38;5;28;03m/* → pdf preview */[39;00m}
+[38;5;250m          [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"w-1/3 p-4 border-l border-white/10 overflow-y-auto"[39m>
+[38;5;250m            [39m<[38;5;18;01mPDFPreviewPanel[39;00m[38;5;250m [39m[38;5;9mpdfUrl[39m={getPdfUrl(selectedPdfId)}[38;5;250m [39m/>
+[38;5;250m          [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m        [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+
+[38;5;250m      [39m<[38;5;18;01mToaster[39;00m[38;5;250m [39m/>
+[38;5;250m    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m  [39m);
+}
+✅ Successfully extracted
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+📂 Page Header
+📍 /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/layout/page-header.tsx
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;18;01mimport[39;00m[38;5;250m [39m[38;5;18;01mtype[39;00m[38;5;250m [39mReact[38;5;250m [39m[38;5;18;01mfrom[39;00m[38;5;250m [39m[38;5;21m"react"[39m
+
+[38;5;18;01minterface[39;00m[38;5;250m [39mPageHeaderProps[38;5;250m [39m{
+[38;5;250m  [39mtitle:[38;5;250m [39m[38;5;18;01mstring[39;00m
+[38;5;250m  [39mdescription?:[38;5;250m [39m[38;5;18;01mstring[39;00m
+[38;5;250m  [39micon?:[38;5;250m [39m[38;5;18;01mReact.ReactNode[39;00m
+}
+
+[38;5;18;01mexport[39;00m[38;5;250m [39m[38;5;18;01mfunction[39;00m[38;5;250m [39mPageHeader({[38;5;250m [39mtitle,[38;5;250m [39mdescription,[38;5;250m [39micon[38;5;250m [39m}:[38;5;250m [39mPageHeaderProps)[38;5;250m [39m{
+[38;5;250m  [39m[38;5;18;01mreturn[39;00m[38;5;250m [39m(
+[38;5;250m    [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"mb-8"[39m>
+[38;5;250m      [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"flex items-center gap-2"[39m>
+[38;5;250m        [39m{icon[38;5;250m [39m&&[38;5;250m [39m<[38;5;18;01mdiv[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-purple-500"[39m>{icon}</[38;5;18;01mdiv[39;00m>}
+[38;5;250m        [39m<[38;5;18;01mh1[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"text-3xl font-bold tracking-tight text-white"[39m>{title}</[38;5;18;01mh1[39;00m>
+[38;5;250m      [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m      [39m{description[38;5;250m [39m&&[38;5;250m [39m<[38;5;18;01mp[39;00m[38;5;250m [39m[38;5;9mclassName[39m=[38;5;21m"mt-2 text-gray-400"[39m>{description}</[38;5;18;01mp[39;00m>}
+[38;5;250m    [39m</[38;5;18;01mdiv[39;00m>
+[38;5;250m  [39m)
+}
+✅ Successfully extracted
+
+
+🏁 EXTRACTION COMPLETE
+Total files extracted: 8
+Generated at: Thu 12 Jun 2025 04:43:10 PM EAT

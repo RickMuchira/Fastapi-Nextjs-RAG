@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 # =========================
 # SHARED INPUT SCHEMAS
@@ -127,3 +127,19 @@ class DocumentWithPath(BaseModel):
 class AskRequest(BaseModel):
     unit_id: int
     question: str
+
+# =========================
+# QUIZ QUESTION SCHEMA
+# =========================
+
+class QuizQuestion(BaseModel):
+    id: int
+    unit_id: int
+    question: str
+    options: str  # JSON string of options
+    correct_answer: str
+    explanation: Optional[str] = None # Make explanation optional for the schema
+    chunk_id: Optional[int] = None # Make chunk_id optional for the schema
+
+    class Config:
+        from_attributes = True

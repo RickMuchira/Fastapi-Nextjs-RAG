@@ -41,8 +41,8 @@ export default function UploadDocumentPage() {
   const units = selectedSemester?.units ?? []
 
   useEffect(() => {
-    // Fetch all courses + nested
-    axios.get(`${API_BASE_URL}/courses/`)
+    // Fetch all courses + nested using the /tree/ endpoint for full hierarchy
+    axios.get(`${API_BASE_URL}/tree/`)
       .then(res => {
         setCourses(res.data)
         // console.log("Courses tree:", res.data)

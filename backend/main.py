@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import re
 import traceback
@@ -28,6 +26,9 @@ from speller import SpellingCorrector  # Our custom speller module
 
 # Import the document-splitting logic
 from chunker import split_document
+
+# Import quiz logic
+import quiz
 
 # -----------------------
 # Database setup
@@ -87,7 +88,7 @@ def normalize_question(q: str) -> str:
     return q
 
 # -----------------------
-# CRUD Endpoints (unchanged)
+# CRUD Endpoints
 # -----------------------
 @app.post("/courses/", response_model=schemas.Course)
 def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db)):
@@ -216,7 +217,20 @@ def upload_document(
     with open(filepath, "wb") as f:
         f.write(file.file.read())
 
-    doc = models.Document(filename=file.filename, filepath=filepath, unit_id=unit_id)
+    u = db.query(models.Unit).get(unit_id)
+    if not u:
+        raise HTTPException(404, "Unit not found")
+    s = u.semester
+    y = s.year
+    c = y.course
+    course_path = f"{c.name} → {y.name} → {s.name} → {u.name}"
+
+    doc = models.Document(
+        filename=file.filename,
+        filepath=filepath,
+        unit_id=unit_id,
+        course_path=course_path
+    )
     db.add(doc)
     db.commit()
     db.refresh(doc)
@@ -252,14 +266,15 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     return {"message": "Document deleted"}
 
 # -----------------------
-# Process Document: Store heading, pages, source_file in metadata
+# Process Document: Store heading, pages, source_file in metadata and database
 # -----------------------
 def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, None]:
     """
     Streaming generator that
       1) Splits the PDF into chunks + metadata,
-      2) Embeds each chunk, indexes/flattens into a FAISS index,
-      3) Yields SSE lines so the front-end can show progress.
+      2) Stores chunks in the database,
+      3) Embeds each chunk, indexes/flattens into a FAISS index,
+      4) Yields SSE lines so the front-end can show progress.
     """
     doc = db.query(models.Document).get(doc_id)
     if not doc:
@@ -283,6 +298,17 @@ def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, No
     if not chunks:
         yield "data: No chunks generated.\n\n"
         return
+
+    # Store chunks in database
+    for chunk_text, meta in zip(chunks, metadata):
+        chunk = models.Chunk(
+            document_id=doc.id,
+            text=chunk_text,
+            heading=meta.get("heading"),
+            pages=json.dumps(meta.get("pages"))
+        )
+        db.add(chunk)
+    db.commit()
 
     # Embed + index each chunk
     embeddings = embedding_model.encode(chunks)
@@ -348,9 +374,9 @@ def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
     for meta, chunk_text in zip(metadata, chunks):
         response.append({
             "chunk_index": meta["chunk_index"],
-            "heading":     meta["heading"],
+            "heading":     meta.get("heading"),
             "text":        chunk_text,
-            "pages":       meta["pages"],
+            "pages":       meta.get("pages")
         })
 
     return response
@@ -360,7 +386,31 @@ def get_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
     docs = db.query(models.Document).filter(models.Document.unit_id == unit_id).all()
     out = []
     for doc in docs:
-        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        # These relationships should already be loaded due to how SQLAlchemy works
+        # and because `doc.unit` is accessed. If `doc.unit` is None, it means
+        # the foreign key `unit_id` is pointing to a non-existent unit, which
+        # implies data integrity issues or an incomplete setup.
+        # Adding a check here for robustness, though the underlying data should be correct.
+        u = doc.unit
+        if not u:
+            print(f"Warning: Document ID {doc.id} references a missing Unit ID {doc.unit_id}")
+            continue # Skip this document or handle as an error
+
+        s = u.semester
+        if not s:
+            print(f"Warning: Unit ID {u.id} references a missing Semester ID {u.semester_id}")
+            continue
+
+        y = s.year
+        if not y:
+            print(f"Warning: Semester ID {s.id} references a missing Year ID {s.year_id}")
+            continue
+
+        c = y.course
+        if not c:
+            print(f"Warning: Year ID {y.id} references a missing Course ID {y.course_id}")
+            continue
+
         path = f"{c.name} → {y.name} → {s.name} → {u.name}"
         out.append(schemas.DocumentWithPath(
             id=doc.id,
@@ -577,7 +627,7 @@ Answer:
     )
 
 # -----------------------
-# (Optional) ask/stream-simulated if you still want it
+# ASK Stream-Simulated Endpoint
 # -----------------------
 @app.post("/ask/stream-simulated")
 async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
@@ -667,8 +717,20 @@ Answer:
     )
 
 # -----------------------
-# Course Tree endpoint (unchanged)
+# Course Tree endpoint
 # -----------------------
 @app.get("/tree/", response_model=List[schemas.Course])
 def get_course_tree(db: Session = Depends(get_db)):
     return db.query(models.Course).all()
+
+# -----------------------
+# Quiz Management
+# -----------------------
+@app.get("/documents/{doc_id}/generate-quiz")
+def generate_quiz(doc_id: int, db: Session = Depends(get_db)):
+    return StreamingResponse(quiz.generate_quiz_for_document(doc_id, db), media_type="text/event-stream")
+
+@app.get("/units/{unit_id}/quizzes", response_model=List[schemas.QuizQuestion])
+def get_quizzes(unit_id: int, db: Session = Depends(get_db)):
+    quizzes = db.query(models.QuizQuestion).filter(models.QuizQuestion.unit_id == unit_id).all()
+    return quizzes

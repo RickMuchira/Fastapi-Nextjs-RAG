@@ -1,0 +1,544 @@
+🔄 Extracting code files...
+
+
+=== FILE: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/page.tsx ===
+
+"use client"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileText, Download, Play, Trash2, Plus, Loader2, Eye } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { PageHeader } from "@/components/layout/page-header"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Toaster } from "sonner"
+import Link from "next/link"
+import Navbar from "@/components/navbar"
+import { SparklesCore } from "@/components/sparkles"
+import { FloatingPaper } from "@/components/floating-paper"
+
+interface Document {
+  id: number
+  filename: string
+  filepath: string
+  course_path: string
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function DocumentListPage() {
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [progress, setProgress] = useState<Record<number, string[]>>({})
+  const [isLoading, setIsLoading] = useState(true)
+  const [processingDocId, setProcessingDocId] = useState<number | null>(null)
+  const [deletingDocId, setDeletingDocId] = useState<number | null>(null)
+
+  const fetchDocuments = async () => {
+    try {
+      setIsLoading(true)
+      const res = await axios.get(`${API_BASE_URL}/documents/`)
+      setDocuments(res.data)
+    } catch (error) {
+      toast.error("Failed to load documents")
+      console.error("Error loading documents:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchDocuments()
+  }, [])
+
+  const handleProcess = (docId: number) => {
+    setProcessingDocId(docId)
+    setProgress((prev) => ({ ...prev, [docId]: [] }))
+
+    const evtSource = new EventSource(`${API_BASE_URL}/documents/${docId}/process`)
+
+    evtSource.onmessage = (event) => {
+      setProgress((prev) => ({
+        ...prev,
+        [docId]: [...(prev[docId] || []), event.data],
+      }))
+    }
+
+    evtSource.onerror = () => {
+      evtSource.close()
+      setProcessingDocId(null)
+      toast.success("Document processing completed")
+      fetchDocuments()
+    }
+  }
+
+  const handleDelete = async () => {
+    if (deletingDocId === null) return
+
+    try {
+      await axios.delete(`${API_BASE_URL}/documents/${deletingDocId}`)
+      toast.success("Document deleted successfully")
+      fetchDocuments()
+      setDeletingDocId(null)
+    } catch (error) {
+      toast.error("Failed to delete document")
+      console.error("Error deleting document:", error)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black/[0.96] text-white antialiased bg-grid-white/[0.02] relative overflow-hidden">
+      {/* Ambient background with moving particles */}
+      <div className="h-full w-full absolute inset-0 z-0">
+        <SparklesCore
+          id="tsparticlesfullpage"
+          background="transparent"
+          minSize={0.6}
+          maxSize={1.4}
+          particleDensity={100}
+          className="w-full h-full"
+          particleColor="#FFFFFF"
+        />
+      </div>
+
+      {/* Floating papers background */}
+      <div className="absolute inset-0 overflow-hidden z-0">
+        <FloatingPaper count={6} />
+      </div>
+
+      <div className="relative z-10">
+        <Navbar />
+
+        <div className="container mx-auto p-6">
+          <PageHeader
+            title="Documents"
+            icon={<FileText className="h-6 w-6" />}
+            description="Manage your uploaded documents"
+          />
+
+          <div className="flex justify-end mb-4">
+            <Button asChild className="bg-purple-600 hover:bg-purple-700 text-white">
+              <Link href="/documents/upload">
+                <Plus className="mr-2 h-4 w-4" />
+                Upload New Document
+              </Link>
+            </Button>
+          </div>
+
+          <Card className="bg-white/5 backdrop-blur-sm border-white/10">
+            <CardHeader>
+              <CardTitle>Uploaded Documents</CardTitle>
+              <CardDescription className="text-gray-400">
+                View, process, and manage your uploaded documents
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="flex justify-center items-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-purple-400" />
+                </div>
+              ) : documents.length === 0 ? (
+                <div className="text-center py-8">
+                  <FileText className="mx-auto h-12 w-12 text-gray-400" />
+                  <h3 className="mt-4 text-lg font-medium">No documents found</h3>
+                  <p className="mt-2 text-sm text-gray-400">Upload your first document to get started</p>
+                  <Button asChild className="mt-4 bg-purple-600 hover:bg-purple-700 text-white">
+                    <Link href="/documents/upload">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Upload Document
+                    </Link>
+                  </Button>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-white/10">
+                      <TableHead>Filename</TableHead>
+                      <TableHead>Course Path</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {documents.map((doc) => (
+                      <TableRow key={doc.id} className="border-white/10">
+                        <TableCell className="font-medium">{doc.filename}</TableCell>
+                        <TableCell>{doc.course_path}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {/* Download */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              asChild
+                              className="border-white/20 hover:bg-purple-500/20"
+                            >
+                              <a
+                                href={`${API_BASE_URL}/documents/download/${doc.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <Download className="h-4 w-4" />
+                                <span className="sr-only">Download</span>
+                              </a>
+                            </Button>
+
+                            {/* Process */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleProcess(doc.id)}
+                              disabled={processingDocId === doc.id}
+                              className="border-white/20 hover:bg-purple-500/20"
+                            >
+                              {processingDocId === doc.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Play className="h-4 w-4" />
+                              )}
+                              <span className="sr-only">Process</span>
+                            </Button>
+
+                            {/* View Chunks */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              asChild
+                              className="border-white/20 hover:bg-purple-500/20"
+                            >
+                              <Link href={`/documents/${doc.id}/chunks`}>
+                                <Eye className="h-4 w-4" />
+                                <span className="sr-only">View Chunks</span>
+                              </Link>
+                            </Button>
+
+                            {/* Delete */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeletingDocId(doc.id)}
+                              className="border-white/20 hover:bg-purple-500/20"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              <span className="sr-only">Delete</span>
+                            </Button>
+                          </div>
+
+                          {progress[doc.id] && progress[doc.id].length > 0 && (
+                            <div className="mt-2 text-left">
+                              <Badge variant="outline" className="mb-1 border-purple-500/50">
+                                Processing
+                              </Badge>
+                              <div className="text-xs text-gray-400 max-h-24 overflow-y-auto border border-white/10 rounded p-2 bg-black/30">
+                                {progress[doc.id].map((msg, idx) => (
+                                  <div key={idx} className="mb-1">
+                                    {msg}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Delete Confirmation Dialog */}
+          <Dialog open={deletingDocId !== null} onOpenChange={(open) => !open && setDeletingDocId(null)}>
+            <DialogContent className="bg-gray-900 border-white/10 text-white">
+              <DialogHeader>
+                <DialogTitle>Delete Document</DialogTitle>
+                <DialogDescription className="text-gray-400">
+                  Are you sure you want to delete this document? This action cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setDeletingDocId(null)}
+                  className="border-white/20 hover:bg-white/10"
+                >
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
+                  Delete
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Toaster />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+=== FILE: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/components/layout/page-header.tsx ===
+
+import type React from "react"
+
+interface PageHeaderProps {
+  title: string
+  description?: string
+  icon?: React.ReactNode
+}
+
+export function PageHeader({ title, description, icon }: PageHeaderProps) {
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-2">
+        {icon && <div className="text-purple-500">{icon}</div>}
+        <h1 className="text-3xl font-bold tracking-tight text-white">{title}</h1>
+      </div>
+      {description && <p className="mt-2 text-gray-400">{description}</p>}
+    </div>
+  )
+}
+
+
+=== FILE: /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/upload/page.tsx ===
+
+"use client"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileUp, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
+import { PageHeader } from "@/components/layout/page-header"
+import { Progress } from "@/components/ui/progress"
+import { Toaster } from "sonner"
+import Navbar from "@/components/navbar"
+import { SparklesCore } from "@/components/sparkles"
+import { FloatingPaper } from "@/components/floating-paper"
+
+interface Unit { id: number; name: string }
+interface Semester { id: number; name: string; units: Unit[] }
+interface Year { id: number; name: string; semesters: Semester[] }
+interface Course { id: number; name: string; years: Year[] }
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function UploadDocumentPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("")
+  const [selectedYearId, setSelectedYearId] = useState<string>("")
+  const [selectedSemesterId, setSelectedSemesterId] = useState<string>("")
+  const [selectedUnitId, setSelectedUnitId] = useState<string>("")
+  const [file, setFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  // Get the cascaded objects for selection
+  const selectedCourse = courses.find(c => c.id.toString() === selectedCourseId)
+  const years = selectedCourse?.years ?? []
+  const selectedYear = years.find(y => y.id.toString() === selectedYearId)
+  const semesters = selectedYear?.semesters ?? []
+  const selectedSemester = semesters.find(s => s.id.toString() === selectedSemesterId)
+  const units = selectedSemester?.units ?? []
+
+  useEffect(() => {
+    // Fetch all courses + nested
+    axios.get(`${API_BASE_URL}/courses/`)
+      .then(res => {
+        setCourses(res.data)
+        // console.log("Courses tree:", res.data)
+      })
+      .catch(err => {
+        toast.error("Failed to load courses")
+        console.error("Error loading courses:", err)
+      })
+  }, [])
+
+  // Reset deeper selects when a parent is changed
+  useEffect(() => { setSelectedYearId(""); setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedCourseId])
+  useEffect(() => { setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedYearId])
+  useEffect(() => { setSelectedUnitId(""); }, [selectedSemesterId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedUnitId) return toast.error("Please select a unit")
+    if (!file) return toast.error("Please select a file to upload")
+
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("unit_id", selectedUnitId)
+
+    setIsUploading(true)
+    setUploadProgress(0)
+    try {
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => (prev + Math.random() * 15 > 90 ? 90 : prev + Math.random() * 15))
+      }, 300)
+      const res = await axios.post(`${API_BASE_URL}/documents/`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      clearInterval(progressInterval)
+      setUploadProgress(100)
+      if (res.status === 200 || res.status === 201) {
+        toast.success("Document uploaded successfully")
+        setFile(null)
+        const fileInput = document.getElementById("file-upload") as HTMLInputElement
+        if (fileInput) fileInput.value = ""
+      }
+    } catch (error) {
+      toast.error("Upload failed. Please try again.")
+      console.error("Upload failed:", error)
+    } finally {
+      setTimeout(() => { setIsUploading(false); setUploadProgress(0) }, 1000)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black/[0.96] text-white antialiased bg-grid-white/[0.02] relative overflow-hidden">
+      <div className="h-full w-full absolute inset-0 z-0">
+        <SparklesCore id="tsparticlesfullpage" background="transparent" minSize={0.6} maxSize={1.4} particleDensity={100} className="w-full h-full" particleColor="#FFFFFF" />
+      </div>
+      <div className="absolute inset-0 overflow-hidden z-0">
+        <FloatingPaper count={4} />
+      </div>
+      <div className="relative z-10">
+        <Navbar />
+        <div className="container mx-auto p-6">
+          <PageHeader title="Upload Document" icon={<FileUp className="h-6 w-6" />} description="Upload documents to specific courses, years, semesters, and units" />
+          <Card className="max-w-2xl mx-auto bg-white/5 backdrop-blur-sm border-white/10">
+            <CardHeader>
+              <CardTitle>Document Upload</CardTitle>
+              <CardDescription className="text-gray-400">Select the course hierarchy and choose a file to upload</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="course">Course</Label>
+                    <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+                      <SelectTrigger id="course" className="bg-white/5 border-white/20">
+                        <SelectValue placeholder="Select a course" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-gray-900 border-white/20">
+                        {courses.length === 0 ? (
+                          <div className="p-2 text-gray-400">No courses found</div>
+                        ) : (
+                          courses.map(course => (
+                            <SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {years.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="year">Year</Label>
+                      <Select value={selectedYearId} onValueChange={setSelectedYearId}>
+                        <SelectTrigger id="year" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a year" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {years.map(year => (
+                            <SelectItem key={year.id} value={year.id.toString()}>{year.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {semesters.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="semester">Semester</Label>
+                      <Select value={selectedSemesterId} onValueChange={setSelectedSemesterId}>
+                        <SelectTrigger id="semester" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a semester" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {semesters.map(semester => (
+                            <SelectItem key={semester.id} value={semester.id.toString()}>{semester.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {units.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="unit">Unit</Label>
+                      <Select value={selectedUnitId} onValueChange={setSelectedUnitId}>
+                        <SelectTrigger id="unit" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a unit" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {units.map(unit => (
+                            <SelectItem key={unit.id} value={unit.id.toString()}>{unit.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="file-upload">Document</Label>
+                    <div className="border border-white/20 rounded-md p-2 bg-white/5">
+                      <input id="file-upload" type="file" className="w-full text-gray-400" onChange={e => setFile(e.target.files?.[0] || null)} disabled={isUploading} />
+                    </div>
+                    {file && (
+                      <p className="text-sm text-gray-400">Selected file: {file.name} ({(file.size / 1024).toFixed(2)} KB)</p>
+                    )}
+                  </div>
+                </div>
+
+                {isUploading && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-400">Uploading...</span>
+                      <span className="text-sm font-medium">{Math.round(uploadProgress)}%</span>
+                    </div>
+                    <Progress value={uploadProgress} className="h-2 bg-white/10" indicatorClassName="bg-purple-600" />
+                  </div>
+                )}
+
+                <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white" disabled={isUploading}>
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <FileUp className="mr-2 h-4 w-4" />
+                      Upload Document
+                    </>
+                  )}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+          <Toaster />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+=== METADATA ===
+Extracted on: Thu 12 Jun 2025 03:02:27 PM EAT
+Total files: 3
+Output file: /media/rick110/Rick/AI Projects/FASTAPI+NEXTJS+RAG/code_extract.txt

@@ -1,0 +1,1610 @@
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/main.py ---
+
+# main.py
+
+import os
+import re
+import traceback
+import pickle
+import faiss
+import fitz  # PyMuPDF
+from datetime import datetime
+from typing import List, Generator, AsyncGenerator, Dict, Any
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import Path
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy.orm import Session
+
+from sentence_transformers import SentenceTransformer
+from groq import Groq, AuthenticationError
+
+import json
+import asyncio
+
+import schemas
+import models
+from database import SessionLocal, engine
+from speller import SpellingCorrector  # Our custom speller module
+
+# Import the document-splitting logic
+from chunker import split_document
+
+# -----------------------
+# Database setup
+# -----------------------
+models.Base.metadata.create_all(bind=engine)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# -----------------------
+# FastAPI app + CORS
+# -----------------------
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # adjust as needed
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -----------------------
+# Embedding model & storage dirs
+# -----------------------
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+EMBED_DIM = embedding_model.get_sentence_embedding_dimension()
+
+UPLOAD_DIR   = "shared_storage/uploaded_files"
+VECTOR_ROOT  = "shared_storage/vector_stores"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(VECTOR_ROOT, exist_ok=True)
+
+# -----------------------
+# Groq client (hardcoded API key)
+# -----------------------
+GROQ_API_KEY = "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"
+groq_client  = Groq(api_key=GROQ_API_KEY)
+
+# -----------------------
+# Initialize our speller
+# -----------------------
+corrector = SpellingCorrector()
+
+# -----------------------
+# Utility: normalize question
+# -----------------------
+def normalize_question(q: str) -> str:
+    """
+    Lowercases, trims whitespace, and removes trailing punctuation.
+    """
+    q = q.lower().strip()
+    q = re.sub(r"[?.!]+$", "", q)  # remove trailing ., ?, or !
+    q = re.sub(r"\s+", " ", q)     # collapse multiple spaces
+    return q
+
+# -----------------------
+# CRUD Endpoints (unchanged)
+# -----------------------
+@app.post("/courses/", response_model=schemas.Course)
+def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    db_c = models.Course(name=course.name)
+    db.add(db_c)
+    db.commit()
+    db.refresh(db_c)
+    return db_c
+
+@app.get("/courses/", response_model=List[schemas.CourseOut])
+def get_courses(db: Session = Depends(get_db)):
+    return db.query(models.Course).all()
+
+@app.get("/courses/{course_id}", response_model=schemas.Course)
+def get_course(course_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    if not c:
+        raise HTTPException(404, "Course not found")
+    return c
+
+@app.put("/courses/{course_id}", response_model=schemas.Course)
+def update_course(course_id: int, course: schemas.CourseCreate, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    if not c:
+        raise HTTPException(404, "Course not found")
+    c.name = course.name
+    db.commit()
+    db.refresh(c)
+    return c
+
+@app.delete("/courses/{course_id}")
+def delete_course(course_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Course).get(course_id)
+    if not c:
+        raise HTTPException(404, "Course not found")
+    db.delete(c)
+    db.commit()
+    return {"message": "Course deleted"}
+
+@app.post("/courses/{course_id}/years/", response_model=schemas.Year)
+def create_year(course_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    y = models.Year(name=year.name, course_id=course_id)
+    db.add(y)
+    db.commit()
+    db.refresh(y)
+    return y
+
+@app.get("/courses/{course_id}/years/", response_model=List[schemas.Year])
+def get_years(course_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Year).filter_by(course_id=course_id).all()
+
+@app.put("/years/{year_id}", response_model=schemas.Year)
+def update_year(year_id: int, year: schemas.YearCreate, db: Session = Depends(get_db)):
+    y = db.query(models.Year).get(year_id)
+    if not y:
+        raise HTTPException(404, "Year not found")
+    y.name = year.name
+    db.commit()
+    db.refresh(y)
+    return y
+
+@app.delete("/years/{year_id}")
+def delete_year(year_id: int, db: Session = Depends(get_db)):
+    y = db.query(models.Year).get(year_id)
+    if not y:
+        raise HTTPException(404, "Year not found")
+    db.delete(y)
+    db.commit()
+    return {"message": "Year deleted"}
+
+@app.post("/years/{year_id}/semesters/", response_model=schemas.Semester)
+def create_semester(year_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    s = models.Semester(name=semester.name, year_id=year_id)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+@app.get("/years/{year_id}/semesters/", response_model=List[schemas.Semester])
+def get_semesters(year_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Semester).filter_by(year_id=year_id).all()
+
+@app.put("/semesters/{semester_id}", response_model=schemas.Semester)
+def update_semester(semester_id: int, semester: schemas.SemesterCreate, db: Session = Depends(get_db)):
+    s = db.query(models.Semester).get(semester_id)
+    if not s:
+        raise HTTPException(404, "Semester not found")
+    s.name = semester.name
+    db.commit()
+    db.refresh(s)
+    return s
+
+@app.delete("/semesters/{semester_id}")
+def delete_semester(semester_id: int, db: Session = Depends(get_db)):
+    s = db.query(models.Semester).get(semester_id)
+    if not s:
+        raise HTTPException(404, "Semester not found")
+    db.delete(s)
+    db.commit()
+    return {"message": "Semester deleted"}
+
+@app.post("/semesters/{semester_id}/units/", response_model=schemas.Unit)
+def create_unit(semester_id: int, unit: schemas.UnitCreate, db: Session = Depends(get_db)):
+    u = models.Unit(name=unit.name, semester_id=semester_id)
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+@app.get("/semesters/{semester_id}/units/", response_model=List[schemas.Unit])
+def get_units(semester_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Unit).filter_by(semester_id=semester_id).all()
+
+# -----------------------
+# Document Upload & Management
+# -----------------------
+@app.post("/documents/")
+def upload_document(
+    unit_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    ts       = datetime.now().strftime("%Y%m%d%H%M%S")
+    filename = f"{ts}_{file.filename}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(file.file.read())
+
+    doc = models.Document(filename=file.filename, filepath=filepath, unit_id=unit_id)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return {"message": "Upload successful", "id": doc.id}
+
+@app.get("/documents/", response_model=List[schemas.DocumentWithPath])
+def list_documents(db: Session = Depends(get_db)):
+    out = []
+    for doc in db.query(models.Document).all():
+        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        path = f"{c.name} → {y.name} → {s.name} → {u.name}"
+        out.append(schemas.DocumentWithPath(
+            id=doc.id, filename=doc.filename, filepath=doc.filepath, course_path=path
+        ))
+    return out
+
+@app.get("/documents/download/{doc_id}")
+def download_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    return FileResponse(path=doc.filepath, filename=doc.filename, media_type="application/pdf")
+
+@app.delete("/documents/{doc_id}")
+def delete_document(doc_id: int, db: Session = Depends(get_db)):
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if os.path.exists(doc.filepath):
+        os.remove(doc.filepath)
+    db.delete(doc)
+    db.commit()
+    return {"message": "Document deleted"}
+
+# -----------------------
+# Process Document: Store heading, pages, source_file in metadata
+# -----------------------
+def process_document_stream(doc_id: int, db: Session) -> Generator[str, None, None]:
+    """
+    Streaming generator that
+      1) Splits the PDF into chunks + metadata,
+      2) Embeds each chunk, indexes/flattens into a FAISS index,
+      3) Yields SSE lines so the front-end can show progress.
+    """
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        yield "data: Document not found\n\n"
+        return
+
+    yield f"data: Processing {doc.filename}...\n\n"
+    try:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=500,
+            overlap=100
+        )
+    except Exception as e:
+        yield f"data: Failed during splitting: {e}\n\n"
+        return
+
+    yield f"data: Split into {len(chunks)} chunks.\n\n"
+
+    if not chunks:
+        yield "data: No chunks generated.\n\n"
+        return
+
+    # Embed + index each chunk
+    embeddings = embedding_model.encode(chunks)
+    unit_dir   = os.path.join(VECTOR_ROOT, f"unit_{doc.unit_id}")
+    os.makedirs(unit_dir, exist_ok=True)
+
+    idx_path = os.path.join(unit_dir, "index.faiss")
+    map_path = os.path.join(unit_dir, "doc_id_map.pkl")
+
+    if os.path.exists(idx_path):
+        index = faiss.read_index(idx_path)
+        with open(map_path, "rb") as f:
+            doc_map = pickle.load(f)
+    else:
+        index  = faiss.IndexFlatL2(EMBED_DIM)
+        doc_map = {}
+
+    base = index.ntotal
+    index.add(embeddings)
+    for i, chunk_text in enumerate(chunks):
+        doc_map[base + i] = {
+            "doc_id":     doc.id,
+            "text":       chunk_text,
+            "heading":    metadata[i].get("heading"),
+            "pages":      metadata[i].get("pages"),
+            "source_file": metadata[i].get("source_file")
+        }
+
+    faiss.write_index(index, idx_path)
+    with open(map_path, "wb") as f:
+        pickle.dump(doc_map, f)
+
+    yield "data: Processing complete!\n\n"
+
+@app.get("/documents/{doc_id}/process")
+def process_document(doc_id: int, db: Session = Depends(get_db)):
+    return StreamingResponse(process_document_stream(doc_id, db), media_type="text/event-stream")
+
+# -----------------------
+# Return chunks + metadata (inspection)
+# -----------------------
+@app.get("/documents/{doc_id}/chunks", response_model=List[Dict[str, Any]])
+def get_document_chunks(doc_id: int, db: Session = Depends(get_db)):
+    """
+    Return all chunks + metadata for a given document,
+    so you can inspect headings/pages and verify chunking correctness.
+    """
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    try:
+        chunks, metadata = split_document(
+            doc.filepath,
+            filename=doc.filename,
+            max_words=500,
+            overlap=100
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Error splitting document: {e}")
+
+    response = []
+    for meta, chunk_text in zip(metadata, chunks):
+        response.append({
+            "chunk_index": meta["chunk_index"],
+            "heading":     meta["heading"],
+            "text":        chunk_text,
+            "pages":       meta["pages"],
+        })
+
+    return response
+
+@app.get("/units/{unit_id}/documents/", response_model=List[schemas.DocumentWithPath])
+def get_unit_documents(unit_id: int = Path(...), db: Session = Depends(get_db)):
+    docs = db.query(models.Document).filter(models.Document.unit_id == unit_id).all()
+    out = []
+    for doc in docs:
+        u = doc.unit; s = u.semester; y = s.year; c = y.course
+        path = f"{c.name} → {y.name} → {s.name} → {u.name}"
+        out.append(schemas.DocumentWithPath(
+            id=doc.id,
+            filename=doc.filename,
+            filepath=doc.filepath,
+            course_path=path
+        ))
+    return out
+
+# -----------------------
+# ASK Endpoint (non-streaming)
+# -----------------------
+@app.post("/ask")
+def ask_question(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    try:
+        normalized_query = normalize_question(request.question)
+
+        # Spell-correct
+        corrected_query = corrector.correct_sentence(normalized_query)
+
+        # Load FAISS index & doc_map for that unit
+        unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
+        idx_path = os.path.join(unit_dir, "index.faiss")
+        map_path = os.path.join(unit_dir, "doc_id_map.pkl")
+        if not (os.path.exists(idx_path) and os.path.exists(map_path)):
+            return {
+                "answer": "No vector store found for this unit. Please upload & process documents first.",
+                "citations": []
+            }
+
+        index = faiss.read_index(idx_path)
+        with open(map_path, "rb") as f:
+            doc_map = pickle.load(f)
+
+        # Search for top-5 chunks
+        question_embedding = embedding_model.encode([corrected_query])
+        _, I = index.search(question_embedding, k=5)
+        top_indices = [i for i in I[0] if i in doc_map]
+
+        # Build context for the LLM prompt
+        context = "\n".join(doc_map[i]["text"] for i in top_indices)
+        prompt = f"""
+You are a helpful tutor. Use the notes below to answer the student's question. Provide a clear, concise answer:
+
+Notes:
+{context}
+
+Question: {request.question}
+Answer:
+"""
+
+        completion = groq_client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=[
+                {"role": "system", "content": "You are a helpful tutor."},
+                {"role": "user",   "content": prompt}
+            ]
+        )
+        answer = completion.choices[0].message.content.strip()
+
+        # Build citations
+        citations = [
+            {
+                "heading":   doc_map[i].get("heading"),
+                "pages":     doc_map[i].get("pages"),
+                "file":      doc_map[i].get("source_file"),
+            }
+            for i in top_indices
+        ]
+
+        # Remove exact duplicates while preserving order
+        seen = set()
+        unique_citations = []
+        for c in citations:
+            c_str = json.dumps(c, sort_keys=True)
+            if c_str not in seen:
+                seen.add(c_str)
+                unique_citations.append(c)
+
+        return {
+            "answer": answer,
+            "citations": unique_citations
+        }
+
+    except AuthenticationError:
+        raise HTTPException(502, "Groq authentication failed—check your API key")
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(500, str(e))
+
+# -----------------------
+# ASK Streaming Endpoint
+# -----------------------
+@app.post("/ask/stream")
+async def ask_question_stream(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    async def generate_streaming_response() -> AsyncGenerator[str, None]:
+        try:
+            normalized_query = normalize_question(request.question)
+            corrected_query = corrector.correct_sentence(normalized_query)
+
+            # Load FAISS index & doc_map
+            unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
+            idx_path = os.path.join(unit_dir, "index.faiss")
+            map_path = os.path.join(unit_dir, "doc_id_map.pkl")
+            if not (os.path.exists(idx_path) and os.path.exists(map_path)):
+                msg = "No vector store found for this unit. Please upload & process documents first."
+                for i, word in enumerate(msg.split()):
+                    token = word if i == 0 else f" {word}"
+                    data = json.dumps({"token": token})
+                    yield f"data: {data}\n\n"
+                    await asyncio.sleep(0.03)
+                # Send empty citations array, then [DONE]
+                yield f"data: {json.dumps({'citations': []})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            index = faiss.read_index(idx_path)
+            with open(map_path, "rb") as f:
+                doc_map = pickle.load(f)
+
+            # Search top-5 chunks
+            question_embedding = embedding_model.encode([corrected_query])
+            _, I = index.search(question_embedding, k=5)
+            top_indices = [i for i in I[0] if i in doc_map]
+
+            # Build prompt context
+            context = "\n".join(doc_map[i]["text"] for i in top_indices)
+            prompt = f"""
+You are a helpful tutor. Use the notes below to answer the student's question. Provide a clear, concise answer:
+
+Notes:
+{context}
+
+Question: {request.question}
+Answer:
+"""
+
+            # Stream from Groq
+            stream = groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {"role": "system", "content": "You are a helpful tutor."},
+                    {"role": "user",   "content": prompt}
+                ],
+                stream=True,
+                temperature=0.7,
+                max_tokens=1000,
+            )
+
+            # Emit tokens as SSE
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    data = json.dumps({"token": token})
+                    yield f"data: {data}\n\n"
+                    await asyncio.sleep(0.01)
+
+            # Build citations
+            citations = [
+                {
+                    "heading":   doc_map[i].get("heading"),
+                    "pages":     doc_map[i].get("pages"),
+                    "file":      doc_map[i].get("source_file"),
+                }
+                for i in top_indices
+            ]
+
+            # Remove exact duplicates while preserving order
+            seen = set()
+            unique_citations = []
+            for c in citations:
+                c_str = json.dumps(c, sort_keys=True)
+                if c_str not in seen:
+                    seen.add(c_str)
+                    unique_citations.append(c)
+
+            # At end, send the unique citations array
+            yield f"data: {json.dumps({'citations': unique_citations})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        except AuthenticationError:
+            err = "Groq authentication failed—check your API key"
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            # End with no citations
+            yield f"data: {json.dumps({'citations': []})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            err = str(e)
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield f"data: {json.dumps({'citations': []})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate_streaming_response(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+    )
+
+# -----------------------
+# (Optional) ask/stream-simulated if you still want it
+# -----------------------
+@app.post("/ask/stream-simulated")
+async def ask_question_stream_simulated(request: schemas.AskRequest, db: Session = Depends(get_db)):
+    async def simulate_streaming_response() -> AsyncGenerator[str, None]:
+        try:
+            unit_dir = os.path.join(VECTOR_ROOT, f"unit_{request.unit_id}")
+            idx_path = os.path.join(unit_dir, "index.faiss")
+            map_path = os.path.join(unit_dir, "doc_id_map.pkl")
+            if not (os.path.exists(idx_path) and os.path.exists(map_path)):
+                msg = "No vector store found for this unit. Please upload & process documents first."
+                for i, word in enumerate(msg.split()):
+                    token = word if i == 0 else f" {word}"
+                    data = json.dumps({"token": token})
+                    yield f"data: {data}\n\n"
+                    await asyncio.sleep(0.03)
+                yield "data: [DONE]\n\n"
+                return
+
+            index = faiss.read_index(idx_path)
+            with open(map_path, "rb") as f:
+                doc_map = pickle.load(f)
+
+            original_query  = request.question
+            corrected_query = corrector.correct_sentence(original_query)
+
+            question_embedding = embedding_model.encode([corrected_query])
+            _, I = index.search(question_embedding, k=5)
+            chunks = [doc_map[i]["text"] for i in I[0] if i in doc_map]
+
+            context = "\n".join(f"- {c}" for c in chunks)
+            prompt = f"""
+You are a helpful tutor. Based on the notes below, answer the student's question.
+
+Notes:
+{context}
+
+Question: {original_query}
+Answer:
+"""
+
+            completion = groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {"role": "system", "content": "You are a helpful tutor."},
+                    {"role": "user",   "content": prompt}
+                ]
+            )
+            full_answer = completion.choices[0].message.content.strip()
+            words = full_answer.split()
+
+            for i, word in enumerate(words):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.05)
+
+            yield "data: [DONE]\n\n"
+
+        except AuthenticationError:
+            err = "Groq authentication failed—check your API key"
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            err = str(e)
+            for i, word in enumerate(err.split()):
+                token = word if i == 0 else f" {word}"
+                data = json.dumps({"token": token})
+                yield f"data: {data}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        simulate_streaming_response(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+    )
+
+# -----------------------
+# Course Tree endpoint (unchanged)
+# -----------------------
+@app.get("/tree/", response_model=List[schemas.Course])
+def get_course_tree(db: Session = Depends(get_db)):
+    return db.query(models.Course).all()
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/main.py ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/chunker.py ---
+
+import fitz  # PyMuPDF
+import pdfplumber
+from typing import List, Tuple, Dict, Optional
+import logging
+from collections import defaultdict
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class ChunkMetadata(Dict):
+    chunk_index: int
+    heading: str
+    source_file: str
+    pages: List[str]
+
+def detect_headings_by_fontsize(
+    page: fitz.Page,
+    min_font_size: float = 12.0,  # Lowered for proposals
+    max_words: int = 20  # Increased for longer headings in legal docs
+) -> List[Tuple[str, Tuple[float, float, float, float], float]]:
+    """Detect headings based on font size and layout."""
+    headings = []
+    try:
+        page_dict = page.get_text("dict")
+        blocks = page_dict.get("blocks", [])
+        for block in blocks:
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        size = span.get("size", 0)
+                        text = span.get("text", "").strip()
+                        if (
+                            text
+                            and size >= min_font_size
+                            and not text.islower()
+                            and len(text.split()) < max_words
+                            and not text.startswith(("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"))  # Avoid numbered lists
+                        ):
+                            headings.append((text, span.get("bbox", (0, 0, 0, 0)), size))
+    except Exception as e:
+        logger.error(f"Error detecting headings on page {page.number}: {e}")
+    seen = set()
+    return [
+        (h[0], h[1], h[2])
+        for h in sorted(headings, key=lambda x: x[1][1])
+        if h[0] not in seen and not seen.add(h[0])
+    ]
+
+def extract_tables_from_pdf(pdf_path: str) -> Dict[int, List[str]]:
+    """Extract tables from PDF using pdfplumber."""
+    tables = {}
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_tables = []
+                # Use explicit table settings for better detection
+                extracted_tables = page.extract_tables({
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "keep_blank_chars": True
+                })
+                for table in extracted_tables:
+                    markdown_table = table_to_markdown(table)
+                    if markdown_table:
+                        page_tables.append(markdown_table)
+                tables[page_num] = page_tables
+    except Exception as e:
+        logger.error(f"Error extracting tables from PDF {pdf_path}: {e}")
+        return {}
+    return tables
+
+def table_to_markdown(table: List[List]) -> str:
+    """Convert table data to Markdown format."""
+    if not table or not isinstance(table, list) or not isinstance(table[0], list) or not table[0]:
+        return ""
+    col_count = len(table[0])
+    table = [[("" if cell is None else str(cell).strip()) for cell in row] for row in table if len(row) == col_count]
+    if not table:
+        return ""
+    header = "| " + " | ".join(table[0]) + " |"
+    sep = "| " + " | ".join("---" for _ in table[0]) + " |"
+    body = "\n".join("| " + " | ".join(row) + " |" for row in table[1:])
+    return f"{header}\n{sep}\n{body}"
+
+def extract_page_text_with_words(
+    page: fitz.Page, clip: Optional[Tuple[float, float, float, float]] = None
+) -> Tuple[str, List[Tuple[str, int]]]:
+    """Extract text and word-to-page mapping from a page with optional clipping."""
+    try:
+        text = page.get_text("text", clip=clip).strip()
+        words_data = page.get_text("words", clip=clip)  # Returns (x0, y0, x1, y1, word, block_no, line_no, word_no)
+        word_page_map = [(word[4], page.number) for word in words_data]
+        return text, word_page_map
+    except Exception as e:
+        logger.error(f"Error extracting text from page {page.number}: {e}")
+        return "", []
+
+def chunk_section(
+    section_text: str,
+    heading: str,
+    word_page_map: List[Tuple[str, int]],
+    real_labels: List[str],
+    filename: str,
+    max_words: int,
+    overlap: int,
+    chunk_index: int
+) -> Tuple[List[str], List[ChunkMetadata], int]:
+    """Chunk a section of text with precise page metadata."""
+    chunks, metadata = [], []
+    words = section_text.split()
+    total_words = len(words)
+
+    if not word_page_map:
+        # Fallback to approximation if no word-page mapping
+        words_per_page = max(1, total_words // max(1, len(real_labels)))
+        start_word = 0
+        while start_word < total_words:
+            end_word = min(start_word + max_words, total_words)
+            sub_words = words[start_word:end_word]
+            if not sub_words:
+                break
+            sub_text = " ".join(sub_words)
+            chunk_text = f"== {heading} ==\n{sub_text}"
+            approx_start = min(start_word // words_per_page, len(real_labels) - 1)
+            approx_end = min((end_word - 1) // words_per_page, len(real_labels) - 1)
+            sub_pages = real_labels[approx_start:approx_end + 1]
+            chunks.append(chunk_text)
+            metadata.append({
+                "chunk_index": chunk_index,
+                "heading": heading or "No heading detected",
+                "source_file": filename,
+                "pages": sub_pages
+            })
+            chunk_index += 1
+            start_word += max_words - overlap
+        return chunks, metadata, chunk_index
+
+    # Use word-page mapping for precise page assignment
+    start_word = 0
+    word_idx = 0
+    while start_word < total_words:
+        end_word = min(start_word + max_words, total_words)
+        sub_words = words[start_word:end_word]
+        if not sub_words:
+            break
+        sub_text = " ".join(sub_words)
+        chunk_text = f"== {heading} ==\n{sub_text}"
+
+        # Find pages for this chunk
+        page_counts = defaultdict(int)
+        word_count = 0
+        for word, page_num in word_page_map:
+            if word_idx <= word_count < word_idx + (end_word - start_word):
+                page_counts[page_num] += 1
+            word_count += 1
+        # Assign the page with the most words, or fall back to range
+        if page_counts:
+            most_common_page = max(page_counts, key=page_counts.get)
+            sub_pages = [real_labels[most_common_page] if most_common_page < len(real_labels) else str(most_common_page + 1)]
+            # Include multiple pages only for large chunks
+            if end_word - start_word > max_words // 2 and len(page_counts) > 1:
+                sub_pages = [
+                    real_labels[p] if p < len(real_labels) else str(p + 1)
+                    for p in sorted(page_counts.keys())
+                ]
+        else:
+            sub_pages = real_labels[:]
+
+        chunks.append(chunk_text)
+        metadata.append({
+            "chunk_index": chunk_index,
+            "heading": heading or "No heading detected",
+            "source_file": filename,
+            "pages": sub_pages
+        })
+        chunk_index += 1
+        start_word += max_words - overlap
+        word_idx += max_words - overlap
+    return chunks, metadata, chunk_index
+
+def split_document(
+    pdf_path: str,
+    *,
+    filename: str = None,
+    max_words: int = 300,  # Reduced for precise citations
+    overlap: int = 50     # Reduced to minimize redundancy
+) -> Tuple[List[str], List[ChunkMetadata]]:
+    """Split PDF into chunks with headings, tables, and precise page metadata."""
+    if not pdf_path.endswith(".pdf"):
+        raise ValueError("Invalid PDF path")
+    if max_words <= 0 or overlap < 0 or overlap >= max_words:
+        raise ValueError("Invalid max_words or overlap values")
+
+    chunks, metadata = [], []
+    chunk_index = 0
+    filename = filename or pdf_path
+
+    try:
+        with fitz.open(pdf_path) as doc:
+            try:
+                toc = doc.get_toc()
+                use_outline = toc and len(toc) > 1
+            except Exception as e:
+                logger.error(f"Error reading TOC: {e}")
+                use_outline = False
+
+            tables_by_page = extract_tables_from_pdf(pdf_path)
+
+            if use_outline:
+                try:
+                    labels = doc.get_page_labels()
+                except Exception:
+                    labels = [str(i + 1) for i in range(doc.page_count)]
+                outline_sections = []
+                for idx, (level, title, pg) in enumerate(toc):
+                    if level in (1, 2):
+                        start = max(0, min(doc.page_count - 1, pg - 1))
+                        end = min(doc.page_count - 1, toc[idx + 1][2] - 2 if idx + 1 < len(toc) else doc.page_count - 1)
+                        if start <= end:
+                            outline_sections.append((title, start, end))
+                for heading, start_pg, end_pg in outline_sections:
+                    real_labels, pages_text, word_page_map = [], [], []
+                    for p in range(start_pg, end_pg + 1):
+                        if p >= doc.page_count:
+                            continue
+                        real_labels.append(labels[p] if p < len(labels) else str(p + 1))
+                        page = doc.load_page(p)
+                        for tbl in tables_by_page.get(p, []):
+                            chunks.append(f"== {heading} ==\n{tbl}")
+                            metadata.append({
+                                "chunk_index": chunk_index,
+                                "heading": heading,
+                                "source_file": filename,
+                                "pages": [real_labels[-1]]  # Exact page for table
+                            })
+                            chunk_index += 1
+                        text, page_words = extract_page_text_with_words(page)
+                        if text:  # Skip empty pages
+                            pages_text.append(text)
+                            word_page_map.extend(page_words)
+                    section_text = "\n".join(p for p in pages_text if p).strip()
+                    if section_text:
+                        section_chunks, section_metadata, chunk_index = chunk_section(
+                            section_text, heading, word_page_map, real_labels, filename, max_words, overlap, chunk_index
+                        )
+                        chunks.extend(section_chunks)
+                        metadata.extend(section_metadata)
+            else:
+                try:
+                    labels = doc.get_page_labels()
+                except Exception:
+                    labels = [str(i + 1) for i in range(doc.page_count)]
+                for pno in range(doc.page_count):
+                    page = doc.load_page(pno)
+                    real_label = labels[pno] if pno < len(labels) else str(pno + 1)
+                    headings = detect_headings_by_fontsize(page)
+                    page_text, word_page_map = extract_page_text_with_words(page)
+                    for tbl in tables_by_page.get(pno, []):
+                        chunks.append(f"== No heading ==\n{tbl}")
+                        metadata.append({
+                            "chunk_index": chunk_index,
+                            "heading": "No heading detected",
+                            "source_file": filename,
+                            "pages": [real_label]  # Exact page for table
+                        })
+                        chunk_index += 1
+                    if page_text:  # Skip empty pages
+                        if headings:
+                            for text, _, _ in headings:
+                                section_chunks, section_metadata, chunk_index = chunk_section(
+                                    page_text, text, word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                                )
+                                chunks.extend(section_chunks)
+                                metadata.extend(section_metadata)
+                        else:
+                            section_chunks, section_metadata, chunk_index = chunk_section(
+                                page_text, "No heading detected", word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                            )
+                            chunks.extend(section_chunks)
+                            metadata.extend(section_metadata)
+
+        assert len(chunks) == len(metadata), f"Mismatch: {len(chunks)} chunks vs {len(metadata)} metadata"
+        return chunks, metadata
+    except Exception as e:
+        logger.error(f"Failed to process PDF {pdf_path}: {e}")
+        raise
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/chunker.py ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/database.py ---
+
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag.db")
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/database.py ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/models.py ---
+
+from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy.orm import relationship
+from database import Base
+
+class Course(Base):
+    __tablename__ = 'courses'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+
+    years = relationship("Year", back_populates="course", cascade="all, delete")
+
+
+class Year(Base):
+    __tablename__ = 'years'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(20), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+
+    course = relationship("Course", back_populates="years")
+    semesters = relationship("Semester", back_populates="year", cascade="all, delete")
+
+
+class Semester(Base):
+    __tablename__ = 'semesters'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(20), nullable=False)
+    year_id = Column(Integer, ForeignKey("years.id"), nullable=False)
+
+    year = relationship("Year", back_populates="semesters")
+    units = relationship("Unit", back_populates="semester", cascade="all, delete")
+
+
+class Unit(Base):
+    __tablename__ = 'units'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    semester_id = Column(Integer, ForeignKey("semesters.id"), nullable=False)
+
+    semester = relationship("Semester", back_populates="units")
+    documents = relationship("Document", back_populates="unit", cascade="all, delete")
+
+
+class Document(Base):
+    __tablename__ = 'documents'
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, nullable=False)
+    filepath = Column(String, nullable=False)  # ✅ Make sure this field exists in the DB
+    unit_id = Column(Integer, ForeignKey("units.id"), nullable=False)
+
+    unit = relationship("Unit", back_populates="documents")
+
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/models.py ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/schemas.py ---
+
+from pydantic import BaseModel
+from typing import List
+
+# =========================
+# SHARED INPUT SCHEMAS
+# =========================
+
+class CourseBase(BaseModel):
+    name: str
+
+class CourseCreate(CourseBase):
+    pass
+
+class YearBase(BaseModel):
+    name: str
+
+class YearCreate(YearBase):
+    pass
+
+class SemesterBase(BaseModel):
+    name: str
+
+class SemesterCreate(SemesterBase):
+    pass
+
+class UnitBase(BaseModel):
+    name: str
+
+class UnitCreate(UnitBase):
+    pass
+
+# =========================
+# OUTPUT MODELS (NESTED)
+# =========================
+
+class Unit(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class Semester(BaseModel):
+    id: int
+    name: str
+    units: List[Unit] = []
+
+    class Config:
+        from_attributes = True
+
+class Year(BaseModel):
+    id: int
+    name: str
+    semesters: List[Semester] = []
+
+    class Config:
+        from_attributes = True
+
+class Course(BaseModel):
+    id: int
+    name: str
+    years: List[Year] = []
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# FLAT OUTPUTS (FOR LISTING)
+# =========================
+
+class CourseOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class YearOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class SemesterOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class UnitOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# DOCUMENT SCHEMAS
+# =========================
+
+class DocumentBase(BaseModel):
+    filename: str
+    filepath: str
+    unit_id: int
+
+class Document(DocumentBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class DocumentWithPath(BaseModel):
+    id: int
+    filename: str
+    filepath: str
+    course_path: str  # e.g., "CS → Year 1 → Sem 2 → Data Structures"
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# ASK REQUEST SCHEMA
+# =========================
+
+class AskRequest(BaseModel):
+    unit_id: int
+    question: str
+
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/backend/schemas.py ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/upload/page.tsx ---
+
+"use client"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { toast } from "sonner"
+import { FileUp, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
+import { PageHeader } from "@/components/layout/page-header"
+import { Progress } from "@/components/ui/progress"
+import { Toaster } from "sonner"
+import Navbar from "@/components/navbar"
+import { SparklesCore } from "@/components/sparkles"
+import { FloatingPaper } from "@/components/floating-paper"
+
+interface Unit { id: number; name: string }
+interface Semester { id: number; name: string; units: Unit[] }
+interface Year { id: number; name: string; semesters: Semester[] }
+interface Course { id: number; name: string; years: Year[] }
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+
+export default function UploadDocumentPage() {
+  const [courses, setCourses] = useState<Course[]>([])
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("")
+  const [selectedYearId, setSelectedYearId] = useState<string>("")
+  const [selectedSemesterId, setSelectedSemesterId] = useState<string>("")
+  const [selectedUnitId, setSelectedUnitId] = useState<string>("")
+  const [file, setFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+
+  // Get the cascaded objects for selection
+  const selectedCourse = courses.find(c => c.id.toString() === selectedCourseId)
+  const years = selectedCourse?.years ?? []
+  const selectedYear = years.find(y => y.id.toString() === selectedYearId)
+  const semesters = selectedYear?.semesters ?? []
+  const selectedSemester = semesters.find(s => s.id.toString() === selectedSemesterId)
+  const units = selectedSemester?.units ?? []
+
+  useEffect(() => {
+    // Fetch all courses + nested
+    axios.get(`${API_BASE_URL}/courses/`)
+      .then(res => {
+        setCourses(res.data)
+        // console.log("Courses tree:", res.data)
+      })
+      .catch(err => {
+        toast.error("Failed to load courses")
+        console.error("Error loading courses:", err)
+      })
+  }, [])
+
+  // Reset deeper selects when a parent is changed
+  useEffect(() => { setSelectedYearId(""); setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedCourseId])
+  useEffect(() => { setSelectedSemesterId(""); setSelectedUnitId(""); }, [selectedYearId])
+  useEffect(() => { setSelectedUnitId(""); }, [selectedSemesterId])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedUnitId) return toast.error("Please select a unit")
+    if (!file) return toast.error("Please select a file to upload")
+
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("unit_id", selectedUnitId)
+
+    setIsUploading(true)
+    setUploadProgress(0)
+    try {
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => (prev + Math.random() * 15 > 90 ? 90 : prev + Math.random() * 15))
+      }, 300)
+      const res = await axios.post(`${API_BASE_URL}/documents/`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      clearInterval(progressInterval)
+      setUploadProgress(100)
+      if (res.status === 200 || res.status === 201) {
+        toast.success("Document uploaded successfully")
+        setFile(null)
+        const fileInput = document.getElementById("file-upload") as HTMLInputElement
+        if (fileInput) fileInput.value = ""
+      }
+    } catch (error) {
+      toast.error("Upload failed. Please try again.")
+      console.error("Upload failed:", error)
+    } finally {
+      setTimeout(() => { setIsUploading(false); setUploadProgress(0) }, 1000)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black/[0.96] text-white antialiased bg-grid-white/[0.02] relative overflow-hidden">
+      <div className="h-full w-full absolute inset-0 z-0">
+        <SparklesCore id="tsparticlesfullpage" background="transparent" minSize={0.6} maxSize={1.4} particleDensity={100} className="w-full h-full" particleColor="#FFFFFF" />
+      </div>
+      <div className="absolute inset-0 overflow-hidden z-0">
+        <FloatingPaper count={4} />
+      </div>
+      <div className="relative z-10">
+        <Navbar />
+        <div className="container mx-auto p-6">
+          <PageHeader title="Upload Document" icon={<FileUp className="h-6 w-6" />} description="Upload documents to specific courses, years, semesters, and units" />
+          <Card className="max-w-2xl mx-auto bg-white/5 backdrop-blur-sm border-white/10">
+            <CardHeader>
+              <CardTitle>Document Upload</CardTitle>
+              <CardDescription className="text-gray-400">Select the course hierarchy and choose a file to upload</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="course">Course</Label>
+                    <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+                      <SelectTrigger id="course" className="bg-white/5 border-white/20">
+                        <SelectValue placeholder="Select a course" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-gray-900 border-white/20">
+                        {courses.length === 0 ? (
+                          <div className="p-2 text-gray-400">No courses found</div>
+                        ) : (
+                          courses.map(course => (
+                            <SelectItem key={course.id} value={course.id.toString()}>{course.name}</SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {years.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="year">Year</Label>
+                      <Select value={selectedYearId} onValueChange={setSelectedYearId}>
+                        <SelectTrigger id="year" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a year" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {years.map(year => (
+                            <SelectItem key={year.id} value={year.id.toString()}>{year.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {semesters.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="semester">Semester</Label>
+                      <Select value={selectedSemesterId} onValueChange={setSelectedSemesterId}>
+                        <SelectTrigger id="semester" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a semester" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {semesters.map(semester => (
+                            <SelectItem key={semester.id} value={semester.id.toString()}>{semester.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {units.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="unit">Unit</Label>
+                      <Select value={selectedUnitId} onValueChange={setSelectedUnitId}>
+                        <SelectTrigger id="unit" className="bg-white/5 border-white/20">
+                          <SelectValue placeholder="Select a unit" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-gray-900 border-white/20">
+                          {units.map(unit => (
+                            <SelectItem key={unit.id} value={unit.id.toString()}>{unit.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="file-upload">Document</Label>
+                    <div className="border border-white/20 rounded-md p-2 bg-white/5">
+                      <input id="file-upload" type="file" className="w-full text-gray-400" onChange={e => setFile(e.target.files?.[0] || null)} disabled={isUploading} />
+                    </div>
+                    {file && (
+                      <p className="text-sm text-gray-400">Selected file: {file.name} ({(file.size / 1024).toFixed(2)} KB)</p>
+                    )}
+                  </div>
+                </div>
+
+                {isUploading && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-400">Uploading...</span>
+                      <span className="text-sm font-medium">{Math.round(uploadProgress)}%</span>
+                    </div>
+                    <Progress value={uploadProgress} className="h-2 bg-white/10" indicatorClassName="bg-purple-600" />
+                  </div>
+                )}
+
+                <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white" disabled={isUploading}>
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <FileUp className="mr-2 h-4 w-4" />
+                      Upload Document
+                    </>
+                  )}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+          <Toaster />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/documents/upload/page.tsx ---
+
+
+--- START OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/ask/page.tsx ---
+
+// app/ask/page.tsx
+
+"use client";
+
+import { useState, useEffect } from "react";
+import Navbar from "@/components/navbar";
+import { SparklesCore } from "@/components/sparkles";
+import ChatSidebar from "@/components/chat/chat-sidebar";
+import ChatWindow from "@/components/chat/chat-window";
+import PDFPreviewPanel from "@/components/pdf-preview-panel";
+import UnitSelector from "@/components/chat/unit-selector"; // (only used if you kept the top selector)
+import { toast, Toaster } from "sonner";
+import axios from "axios";
+import type { ChatSession, ChatMessage } from "@/types/chat";
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+interface DocumentWithPath {
+  id: number;
+  filename: string;
+  filepath: string;
+  course_path: string;
+}
+
+export default function AskQuestionPage() {
+  // chat
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] =
+    useState<string | null>(null);
+
+  // unit & pdf state
+  const [selectedUnit, setSelectedUnit] = useState<{
+    unitId: number;
+    unitName: string;
+    coursePath: string;
+  } | null>(null);
+  const [unitPdfs, setUnitPdfs] = useState<DocumentWithPath[]>([]);
+  const [selectedPdfId, setSelectedPdfId] = useState<number | null>(null);
+
+  // load / save sessions
+  useEffect(() => {
+    const raw = localStorage.getItem("chatSessions");
+    if (raw) {
+      try {
+        const sessions = JSON.parse(raw);
+        setChatSessions(
+          sessions.map((s: any) => ({
+            ...s,
+            timestamp: new Date(s.timestamp),
+            messages: s.messages.map((m: any) => ({
+              ...m,
+              timestamp: new Date(m.timestamp),
+            })),
+          }))
+        );
+      } catch {}
+    }
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("chatSessions", JSON.stringify(chatSessions));
+  }, [chatSessions]);
+
+  // fetch PDFs on unit change
+  useEffect(() => {
+    if (!selectedUnit) {
+      setUnitPdfs([]);
+      setSelectedPdfId(null);
+      return;
+    }
+    axios
+      .get<DocumentWithPath[]>(
+        `${API_BASE_URL}/units/${selectedUnit.unitId}/documents/`
+      )
+      .then((res) => {
+        setUnitPdfs(res.data);
+        setSelectedPdfId(res.data.length ? res.data[0].id : null);
+      })
+      .catch(() => {
+        toast.error("Could not load PDFs for that unit");
+        setUnitPdfs([]);
+        setSelectedPdfId(null);
+      });
+  }, [selectedUnit]);
+
+  const getPdfUrl = (id: number | null) =>
+    id ? `${API_BASE_URL}/documents/download/${id}` : null;
+
+  // chat helpers
+  const getCurrentSession = () =>
+    chatSessions.find((s) => s.id === currentSessionId) || null;
+
+  const createNewSession = (
+    unitId: number,
+    unitName: string,
+    coursePath: string
+  ) => {
+    const id = Date.now().toString();
+    const newSess: ChatSession = {
+      id,
+      unitId,
+      unitName,
+      coursePath,
+      messages: [],
+      timestamp: new Date(),
+    };
+    setChatSessions((prev) => [newSess, ...prev]);
+    setCurrentSessionId(id);
+    return id;
+  };
+
+  const addMessage = (sid: string, msg: ChatMessage) =>
+    setChatSessions((prev) =>
+      prev.map((s) =>
+        s.id === sid ? { ...s, messages: [...s.messages, msg] } : s
+      )
+    );
+
+  const updateMessage = (
+    sid: string,
+    mid: string,
+    updates: Partial<ChatMessage>
+  ) =>
+    setChatSessions((prev) =>
+      prev.map((s) =>
+        s.id === sid
+          ? {
+              ...s,
+              messages: s.messages.map((m) =>
+                m.id === mid ? { ...m, ...updates } : m
+              ),
+            }
+          : s
+      )
+    );
+
+  const deleteSession = (sid: string) => {
+    setChatSessions((prev) => prev.filter((s) => s.id !== sid));
+    if (currentSessionId === sid) setCurrentSessionId(null);
+    toast.success("Chat session deleted");
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black/[0.96] text-white relative overflow-hidden">
+      {/* Background sparkles */}
+      <div className="absolute inset-0 z-0">
+        <SparklesCore
+          id="tsparticlesfullpage"
+          background="transparent"
+          minSize={0.4}
+          maxSize={1.0}
+          particleDensity={50}
+          className="w-full h-full"
+          particleColor="#FFFFFF"
+        />
+      </div>
+
+      <div className="relative z-10 flex flex-col h-screen">
+        <Navbar />
+
+        {/* three‐column grid */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* ← sidebar */}
+          <ChatSidebar
+            sessions={chatSessions}
+            currentSessionId={currentSessionId}
+            onSelectSession={setCurrentSessionId}
+            onDeleteSession={deleteSession}
+            onNewSession={() => setCurrentSessionId(null)}
+          />
+
+          {/* ↔ center: chat + bottom controls */}
+          <ChatWindow
+            currentSession={getCurrentSession()}
+            onCreateSession={createNewSession}
+            onAddMessage={addMessage}
+            onUpdateMessage={updateMessage}
+
+            /** ← these five are *required* **/
+            selectedUnit={selectedUnit}
+            onUnitSelect={setSelectedUnit}
+            unitPdfs={unitPdfs}
+            selectedPdfId={selectedPdfId}
+            onPdfSelect={setSelectedPdfId}
+          />
+
+          {/* → pdf preview */}
+          <div className="w-1/3 p-4 border-l border-white/10 overflow-y-auto">
+            <PDFPreviewPanel pdfUrl={getPdfUrl(selectedPdfId)} />
+          </div>
+        </div>
+      </div>
+
+      <Toaster />
+    </div>
+  );
+}
+
+--- END OF /home/rick110/RickDrive/AI Projects/FASTAPI+NEXTJS+RAG/frontend/app/ask/page.tsx ---
+
