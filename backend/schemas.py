@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from typing import Dict
 
 # =========================
 # SHARED INPUT SCHEMAS
@@ -148,10 +149,10 @@ class QuizQuestion(BaseModel):
     id: int
     unit_id: int
     question: str
-    options: str  # JSON string of options
+    options: Dict[str, str]  # ✅ No longer a string!
     correct_answer: str
-    explanation: Optional[str] = None # Make explanation optional for the schema
-    chunk_id: Optional[int] = None # Make chunk_id optional for the schema
+    explanation: Optional[str] = None
+    chunk_id: Optional[int] = None
 
     class Config:
         from_attributes = True

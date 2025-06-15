@@ -1,40 +1,72 @@
-'use client';
+"use client";
 
-import TopicsGrid from "@/components/topics/topics-grid";
-import { motion } from "framer-motion";
-import BottomNavigation from "@/components/layout/bottom-navigation";
-import { PageHeader } from "@/components/layout/page-header"; // Corrected import
-import { SparklesCore } from "@/components/sparkles";
-import { FloatingPaper } from "@/components/floating-paper";
-import { BookOpen } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import axios from "axios";
+
+type UnitTopic = {
+  id: number;
+  name: string;
+  quiz_count: number;
+};
 
 export default function TopicsPage() {
+  const [topics, setTopics] = useState<UnitTopic[]>([]);
+  const router = useRouter();
+
+  useEffect(() => {
+    axios
+      .get<UnitTopic[]>("http://localhost:8000/units/topics")
+      .then((res) => setTopics(res.data))
+      .catch((err) => console.error("Failed to load topics", err));
+  }, []);
+
+  const handleStartQuiz = (unitId: number) => {
+    router.push(`/quiz/${unitId}`);
+  };
+
+  const handleGenerateQuiz = (unitId: number) => {
+    router.push(`/generate-quiz/${unitId}`);
+  };
+
   return (
-    <main className="min-h-screen bg-black/[0.96] antialiased bg-grid-white/[0.02] relative overflow-hidden">
-      {/* Ambient background */}
-      <div className="h-full w-full absolute inset-0 z-0">
-        <SparklesCore
-          id="tsparticlesfullpage"
-          background="transparent"
-          minSize={0.6}
-          maxSize={1.4}
-          particleDensity={100}
-          className="w-full h-full"
-          particleColor="#FFFFFF"
-        />
-      </div>
+    <div className="max-w-4xl mx-auto py-8 px-4">
+      <h1 className="text-3xl font-bold mb-6">Topics</h1>
+      {topics.length === 0 ? (
+        <p>No units found.</p>
+      ) : (
+        <ul className="space-y-4">
+          {topics.map((unit) => (
+            <li
+              key={unit.id}
+              className="border p-4 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+            >
+              <div>
+                <div className="text-lg font-medium">{unit.name}</div>
+                <div className="text-sm text-gray-600">
+                  {unit.quiz_count} quiz question{unit.quiz_count !== 1 ? "s" : ""}
+                </div>
+              </div>
 
-      {/* Floating papers background */}
-      <div className="absolute inset-0 overflow-hidden z-0">
-        <FloatingPaper count={6} />
-      </div>
-
-      <div className="relative z-10 pb-20">
-        <PageHeader title="Topics" description="Choose your learning adventure" icon={<BookOpen />} />
-        <TopicsGrid />
-      </div>
-
-      <BottomNavigation />
-    </main>
+              {unit.quiz_count > 0 ? (
+                <button
+                  onClick={() => handleStartQuiz(unit.id)}
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                  Start Quiz
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleGenerateQuiz(unit.id)}
+                  className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600"
+                >
+                  Generate Quiz
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

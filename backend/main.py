@@ -756,4 +756,13 @@ def generate_quiz(doc_id: int, db: Session = Depends(get_db)):
 @app.get("/units/{unit_id}/quizzes", response_model=List[schemas.QuizQuestion])
 def get_quizzes(unit_id: int, db: Session = Depends(get_db)):
     quizzes = db.query(models.QuizQuestion).filter(models.QuizQuestion.unit_id == unit_id).all()
+    
+    # Convert options JSON string → dict
+    for quiz in quizzes:
+        if isinstance(quiz.options, str):
+            try:
+                quiz.options = json.loads(quiz.options)
+            except Exception as e:
+                print(f"Failed to parse options for quiz ID {quiz.id}: {e}")
+                quiz.options = {}
     return quizzes

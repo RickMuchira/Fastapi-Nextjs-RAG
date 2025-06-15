@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import json
@@ -58,11 +58,12 @@ class Chunk(Base):
     quiz_questions = relationship("QuizQuestion", back_populates="chunk", cascade="all, delete")
 
 class QuizQuestion(Base):
-    __tablename__ = 'quiz_questions'
-    id = Column(Integer, primary_key=True, index=True)
-    unit_id = Column(Integer, ForeignKey("units.id"), nullable=False)
+    __tablename__ = "quiz_questions"
+
+    id = Column(Integer, primary_key=True)
+    unit_id = Column(Integer, ForeignKey("units.id"))
     question = Column(String, nullable=False)
-    options = Column(String, nullable=False)  # Store as JSON string
+    options = Column(JSON, nullable=False)  # ✅ Change from String to JSON
     correct_answer = Column(String, nullable=False)
     explanation = Column(String)
     chunk_id = Column(Integer, ForeignKey("chunks.id"))
