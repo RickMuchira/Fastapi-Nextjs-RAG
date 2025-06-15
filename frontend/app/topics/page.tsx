@@ -1,10 +1,12 @@
-import TopicsGrid from "@/components/topics/topics-grid"
-import { motion } from "framer-motion"
-import BottomNavigation from "@/components/layout/bottom-navigation"
-import PageHeader from "@/components/layout/page-header"
-import { SparklesCore } from "@/components/sparkles"
-import { FloatingPaper } from "@/components/floating-paper"
-import { BookOpen } from "lucide-react"
+'use client';
+
+import TopicsGrid from "@/components/topics/topics-grid";
+import { motion } from "framer-motion";
+import BottomNavigation from "@/components/layout/bottom-navigation";
+import { PageHeader } from "@/components/layout/page-header"; // Corrected import
+import { SparklesCore } from "@/components/sparkles";
+import { FloatingPaper } from "@/components/floating-paper";
+import { BookOpen } from "lucide-react";
 
 export default function TopicsPage() {
   return (
@@ -28,11 +30,11 @@ export default function TopicsPage() {
       </div>
 
       <div className="relative z-10 pb-20">
-        <PageHeader title="Topics" description="Choose your learning adventure" icon={BookOpen} />
+        <PageHeader title="Topics" description="Choose your learning adventure" icon={<BookOpen />} />
         <TopicsGrid />
       </div>
 
       <BottomNavigation />
     </main>
-  )
+  );
 }

@@ -1,3 +1,304 @@
+===== chunker.py =====
+import fitz  # PyMuPDF
+import pdfplumber
+from typing import List, Tuple, Dict, Optional
+import logging
+from collections import defaultdict
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class ChunkMetadata(Dict):
+    chunk_index: int
+    heading: str
+    source_file: str
+    pages: List[str]
+
+def detect_headings_by_fontsize(
+    page: fitz.Page,
+    min_font_size: float = 12.0,  # Lowered for proposals
+    max_words: int = 20  # Increased for longer headings in legal docs
+) -> List[Tuple[str, Tuple[float, float, float, float], float]]:
+    """Detect headings based on font size and layout."""
+    headings = []
+    try:
+        page_dict = page.get_text("dict")
+        blocks = page_dict.get("blocks", [])
+        for block in blocks:
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        size = span.get("size", 0)
+                        text = span.get("text", "").strip()
+                        if (
+                            text
+                            and size >= min_font_size
+                            and not text.islower()
+                            and len(text.split()) < max_words
+                            and not text.startswith(("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"))  # Avoid numbered lists
+                        ):
+                            headings.append((text, span.get("bbox", (0, 0, 0, 0)), size))
+    except Exception as e:
+        logger.error(f"Error detecting headings on page {page.number}: {e}")
+    seen = set()
+    return [
+        (h[0], h[1], h[2])
+        for h in sorted(headings, key=lambda x: x[1][1])
+        if h[0] not in seen and not seen.add(h[0])
+    ]
+
+def extract_tables_from_pdf(pdf_path: str) -> Dict[int, List[str]]:
+    """Extract tables from PDF using pdfplumber."""
+    tables = {}
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_tables = []
+                # Use explicit table settings for better detection
+                extracted_tables = page.extract_tables({
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "keep_blank_chars": True
+                })
+                for table in extracted_tables:
+                    markdown_table = table_to_markdown(table)
+                    if markdown_table:
+                        page_tables.append(markdown_table)
+                tables[page_num] = page_tables
+    except Exception as e:
+        logger.error(f"Error extracting tables from PDF {pdf_path}: {e}")
+        return {}
+    return tables
+
+def table_to_markdown(table: List[List]) -> str:
+    """Convert table data to Markdown format."""
+    if not table or not isinstance(table, list) or not isinstance(table[0], list) or not table[0]:
+        return ""
+    col_count = len(table[0])
+    table = [[("" if cell is None else str(cell).strip()) for cell in row] for row in table if len(row) == col_count]
+    if not table:
+        return ""
+    header = "| " + " | ".join(table[0]) + " |"
+    sep = "| " + " | ".join("---" for _ in table[0]) + " |"
+    body = "\n".join("| " + " | ".join(row) + " |" for row in table[1:])
+    return f"{header}\n{sep}\n{body}"
+
+def extract_page_text_with_words(
+    page: fitz.Page, clip: Optional[Tuple[float, float, float, float]] = None
+) -> Tuple[str, List[Tuple[str, int]]]:
+    """Extract text and word-to-page mapping from a page with optional clipping."""
+    try:
+        text = page.get_text("text", clip=clip).strip()
+        words_data = page.get_text("words", clip=clip)  # Returns (x0, y0, x1, y1, word, block_no, line_no, word_no)
+        word_page_map = [(word[4], page.number) for word in words_data]
+        return text, word_page_map
+    except Exception as e:
+        logger.error(f"Error extracting text from page {page.number}: {e}")
+        return "", []
+
+def chunk_section(
+    section_text: str,
+    heading: str,
+    word_page_map: List[Tuple[str, int]],
+    real_labels: List[str],
+    filename: str,
+    max_words: int,
+    overlap: int,
+    chunk_index: int
+) -> Tuple[List[str], List[ChunkMetadata], int]:
+    """Chunk a section of text with precise page metadata."""
+    chunks, metadata = [], []
+    words = section_text.split()
+    total_words = len(words)
+
+    if not word_page_map:
+        # Fallback to approximation if no word-page mapping
+        words_per_page = max(1, total_words // max(1, len(real_labels)))
+        start_word = 0
+        while start_word < total_words:
+            end_word = min(start_word + max_words, total_words)
+            sub_words = words[start_word:end_word]
+            if not sub_words:
+                break
+            sub_text = " ".join(sub_words)
+            chunk_text = f"== {heading} ==\n{sub_text}"
+            approx_start = min(start_word // words_per_page, len(real_labels) - 1)
+            approx_end = min((end_word - 1) // words_per_page, len(real_labels) - 1)
+            sub_pages = real_labels[approx_start:approx_end + 1]
+            chunks.append(chunk_text)
+            metadata.append({
+                "chunk_index": chunk_index,
+                "heading": heading or "No heading detected",
+                "source_file": filename,
+                "pages": sub_pages
+            })
+            chunk_index += 1
+            start_word += max_words - overlap
+        return chunks, metadata, chunk_index
+
+    # Use word-page mapping for precise page assignment
+    start_word = 0
+    word_idx = 0
+    while start_word < total_words:
+        end_word = min(start_word + max_words, total_words)
+        sub_words = words[start_word:end_word]
+        if not sub_words:
+            break
+        sub_text = " ".join(sub_words)
+        chunk_text = f"== {heading} ==\n{sub_text}"
+
+        # Find pages for this chunk
+        page_counts = defaultdict(int)
+        word_count = 0
+        for word, page_num in word_page_map:
+            if word_idx <= word_count < word_idx + (end_word - start_word):
+                page_counts[page_num] += 1
+            word_count += 1
+        # Assign the page with the most words, or fall back to range
+        if page_counts:
+            most_common_page = max(page_counts, key=page_counts.get)
+            sub_pages = [real_labels[most_common_page] if most_common_page < len(real_labels) else str(most_common_page + 1)]
+            # Include multiple pages only for large chunks
+            if end_word - start_word > max_words // 2 and len(page_counts) > 1:
+                sub_pages = [
+                    real_labels[p] if p < len(real_labels) else str(p + 1)
+                    for p in sorted(page_counts.keys())
+                ]
+        else:
+            sub_pages = real_labels[:]
+
+        chunks.append(chunk_text)
+        metadata.append({
+            "chunk_index": chunk_index,
+            "heading": heading or "No heading detected",
+            "source_file": filename,
+            "pages": sub_pages
+        })
+        chunk_index += 1
+        start_word += max_words - overlap
+        word_idx += max_words - overlap
+    return chunks, metadata, chunk_index
+
+def split_document(
+    pdf_path: str,
+    *,
+    filename: str = None,
+    max_words: int = 300,  # Reduced for precise citations
+    overlap: int = 50     # Reduced to minimize redundancy
+) -> Tuple[List[str], List[ChunkMetadata]]:
+    """Split PDF into chunks with headings, tables, and precise page metadata."""
+    if not pdf_path.endswith(".pdf"):
+        raise ValueError("Invalid PDF path")
+    if max_words <= 0 or overlap < 0 or overlap >= max_words:
+        raise ValueError("Invalid max_words or overlap values")
+
+    chunks, metadata = [], []
+    chunk_index = 0
+    filename = filename or pdf_path
+
+    try:
+        with fitz.open(pdf_path) as doc:
+            try:
+                toc = doc.get_toc()
+                use_outline = toc and len(toc) > 1
+            except Exception as e:
+                logger.error(f"Error reading TOC: {e}")
+                use_outline = False
+
+            tables_by_page = extract_tables_from_pdf(pdf_path)
+
+            if use_outline:
+                try:
+                    labels = doc.get_page_labels()
+                except Exception:
+                    labels = [str(i + 1) for i in range(doc.page_count)]
+                outline_sections = []
+                for idx, (level, title, pg) in enumerate(toc):
+                    if level in (1, 2):
+                        start = max(0, min(doc.page_count - 1, pg - 1))
+                        end = min(doc.page_count - 1, toc[idx + 1][2] - 2 if idx + 1 < len(toc) else doc.page_count - 1)
+                        if start <= end:
+                            outline_sections.append((title, start, end))
+                for heading, start_pg, end_pg in outline_sections:
+                    real_labels, pages_text, word_page_map = [], [], []
+                    for p in range(start_pg, end_pg + 1):
+                        if p >= doc.page_count:
+                            continue
+                        real_labels.append(labels[p] if p < len(labels) else str(p + 1))
+                        page = doc.load_page(p)
+                        for tbl in tables_by_page.get(p, []):
+                            chunks.append(f"== {heading} ==\n{tbl}")
+                            metadata.append({
+                                "chunk_index": chunk_index,
+                                "heading": heading,
+                                "source_file": filename,
+                                "pages": [real_labels[-1]]  # Exact page for table
+                            })
+                            chunk_index += 1
+                        text, page_words = extract_page_text_with_words(page)
+                        if text:  # Skip empty pages
+                            pages_text.append(text)
+                            word_page_map.extend(page_words)
+                    section_text = "\n".join(p for p in pages_text if p).strip()
+                    if section_text:
+                        section_chunks, section_metadata, chunk_index = chunk_section(
+                            section_text, heading, word_page_map, real_labels, filename, max_words, overlap, chunk_index
+                        )
+                        chunks.extend(section_chunks)
+                        metadata.extend(section_metadata)
+            else:
+                try:
+                    labels = doc.get_page_labels()
+                except Exception:
+                    labels = [str(i + 1) for i in range(doc.page_count)]
+                for pno in range(doc.page_count):
+                    page = doc.load_page(pno)
+                    real_label = labels[pno] if pno < len(labels) else str(pno + 1)
+                    headings = detect_headings_by_fontsize(page)
+                    page_text, word_page_map = extract_page_text_with_words(page)
+                    for tbl in tables_by_page.get(pno, []):
+                        chunks.append(f"== No heading ==\n{tbl}")
+                        metadata.append({
+                            "chunk_index": chunk_index,
+                            "heading": "No heading detected",
+                            "source_file": filename,
+                            "pages": [real_label]  # Exact page for table
+                        })
+                        chunk_index += 1
+                    if page_text:  # Skip empty pages
+                        if headings:
+                            for text, _, _ in headings:
+                                section_chunks, section_metadata, chunk_index = chunk_section(
+                                    page_text, text, word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                                )
+                                chunks.extend(section_chunks)
+                                metadata.extend(section_metadata)
+                        else:
+                            section_chunks, section_metadata, chunk_index = chunk_section(
+                                page_text, "No heading detected", word_page_map, [real_label], filename, max_words, overlap, chunk_index
+                            )
+                            chunks.extend(section_chunks)
+                            metadata.extend(section_metadata)
+
+        assert len(chunks) == len(metadata), f"Mismatch: {len(chunks)} chunks vs {len(metadata)} metadata"
+        return chunks, metadata
+    except Exception as e:
+        logger.error(f"Failed to process PDF {pdf_path}: {e}")
+        raise
+===== database.py =====
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag.db")
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+===== main.py =====
 import os
 import re
 import traceback
@@ -67,7 +368,7 @@ os.makedirs(VECTOR_ROOT, exist_ok=True)
 # -----------------------
 # Groq client (hardcoded API key)
 # -----------------------
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 groq_client  = Groq(api_key=GROQ_API_KEY)
 
 # -----------------------
@@ -757,3 +1058,385 @@ def generate_quiz(doc_id: int, db: Session = Depends(get_db)):
 def get_quizzes(unit_id: int, db: Session = Depends(get_db)):
     quizzes = db.query(models.QuizQuestion).filter(models.QuizQuestion.unit_id == unit_id).all()
     return quizzes
+
+===== quiz.py =====
+import os
+import json
+import asyncio
+from typing import AsyncGenerator, Dict, Any, List
+
+from sqlalchemy.orm import Session
+
+from groq import Groq, AsyncGroq, AuthenticationError
+
+import models # This imports your models.py
+
+# --- Configuration ---
+GROQ_API_KEY = "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" # Keep consistent with main.py
+
+# Initialize the ASYNCHRONOUS Groq client
+groq_client = AsyncGroq(api_key=GROQ_API_KEY)
+
+
+async def generate_question_for_chunk(chunk_text: str) -> Dict[str, Any]:
+    """
+    Generate a multiple-choice question from a text chunk using Groq API.
+    Returns a dictionary with question, options, correct answer, and explanation.
+    """
+    print(f"DEBUG: quiz.py: Calling generate_question_for_chunk for chunk text length: {len(chunk_text)}")
+
+    prompt = f"""
+Generate exactly one multiple-choice question with four distinct options (A, B, C, D) based on the following text.
+Ensure the question and its options are directly derivable from the text.
+Provide the single correct option letter (A, B, C, or D) and a concise explanation for why it is correct.
+
+Output your response in JSON format with the following structure:
+{{
+  "question": "The question text.",
+  "options": {{
+    "A": "Option A text",
+    "B": "Option B text",
+    "C": "Option C text",
+    "D": "Option D text"
+  }},
+  "correct_answer": "A",
+  "explanation": "Explanation of the correct answer."
+}}
+
+Text: {chunk_text}
+"""
+    try:
+        completion = await groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {"role": "system", "content": "You are an expert at creating multiple-choice questions in JSON format."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        response_content = completion.choices[0].message.content
+        print(f"DEBUG: quiz.py: Groq raw response (first 200 chars): {response_content[:200]}...")
+        question_data = json.loads(response_content)
+
+        # Basic validation for expected keys and structure
+        if not all(k in question_data for k in ["question", "options", "correct_answer"]):
+            raise ValueError("LLM response missing required keys (question, options, correct_answer).")
+        if not isinstance(question_data["options"], dict) or not all(opt in question_data["options"] for opt in ["A", "B", "C", "D"]):
+            raise ValueError("LLM response 'options' field is not a dictionary with A, B, C, D keys.")
+
+        return question_data
+    except AuthenticationError:
+        print("ERROR: quiz.py: Groq authentication failed. Check your API key.")
+        raise Exception("Groq authentication failed—check your API key.")
+    except json.JSONDecodeError as e:
+        print(f"ERROR: quiz.py: Failed to decode JSON from Groq response: {e}")
+        print(f"ERROR: quiz.py: Raw Groq response that caused error: {response_content if 'response_content' in locals() else 'Not available'}")
+        raise Exception(f"Failed to parse question from LLM (JSON error): {str(e)}")
+    except Exception as e:
+        print(f"ERROR: quiz.py: An unexpected error occurred during question generation: {str(e)}")
+        raise Exception(f"Failed to generate question: {str(e)}")
+
+
+async def generate_quiz_for_document(doc_id: int, db: Session) -> AsyncGenerator[str, None]:
+    """
+    Generate quiz questions for a document by processing its chunks.
+    Yields JSON strings with progress and questions generated.
+    """
+    print(f"DEBUG: quiz.py: generate_quiz_for_document called for doc_id: {doc_id}")
+    doc = db.query(models.Document).get(doc_id)
+    if not doc:
+        print(f"ERROR: quiz.py: Document with ID {doc_id} not found.")
+        yield f"data: {json.dumps({'status': 'error', 'message': 'Document not found'})}\n\n"
+        return
+
+    print(f"DEBUG: quiz.py: Document found: {doc.filename}")
+
+    chunks = db.query(models.Chunk).filter_by(document_id=doc_id).all()
+    total = len(chunks)
+    print(f"DEBUG: quiz.py: Found {total} chunks for document ID {doc_id}.")
+
+    if total == 0:
+        print(f"ERROR: quiz.py: No chunks found for document ID {doc_id}. Ensure document was processed.")
+        yield f"data: {json.dumps({'status': 'error', 'message': 'No chunks found for document. Please process the document first.'})}\n\n"
+        return
+
+    for i, chunk in enumerate(chunks):
+        print(f"DEBUG: quiz.py: Processing chunk {i+1}/{total} (chunk_id: {chunk.id}).")
+        try:
+            # Indicate progress
+            yield f"data: {json.dumps({'status': 'progress', 'current': i + 1, 'total': total, 'message': f'Generating question for chunk {i+1} of {total}...'})}\n\n"
+
+            question_data = await generate_question_for_chunk(chunk.text)
+
+            # Create QuizQuestion instance matching your models.py structure
+            quiz_question = models.QuizQuestion(
+                unit_id=doc.unit_id,
+                question=question_data["question"], # Use 'question' column name
+                options=json.dumps(question_data["options"]), # Store options as JSON string
+                correct_answer=question_data["correct_answer"],
+                explanation=question_data.get("explanation", ""),
+                chunk_id=chunk.id,
+                # Removed source_chunk, source_heading, source_pages as they are not columns in QuizQuestion based on your models.py
+                # They are accessible via the 'chunk' relationship if needed from the DB
+            )
+            db.add(quiz_question)
+            db.commit()
+            db.refresh(quiz_question)
+
+            print(f"DEBUG: quiz.py: Successfully generated and saved question {quiz_question.id} for chunk {chunk.id}.")
+
+            # Send the generated question data to the frontend
+            yield f"data: {json.dumps({
+                'status': 'question_generated',
+                'question': question_data['question'],
+                'options': question_data['options'], # Send original dict, not JSON string, for frontend use
+                'correct_answer': question_data['correct_answer'],
+                'explanation': question_data.get('explanation', ''),
+                'db_id': quiz_question.id
+            })}\n\n"
+            await asyncio.sleep(0.01)
+
+        except Exception as e:
+            db.rollback()
+            print(f"ERROR: quiz.py: Failed to generate or save question for chunk {chunk.id}: {str(e)}")
+            yield f"data: {json.dumps({'status': 'error', 'message': f'Error processing chunk {i+1}: {str(e)}'})}\n\n"
+            continue
+
+    print(f"DEBUG: quiz.py: Quiz generation complete for document ID {doc_id}.")
+    yield f"data: {json.dumps({'status': 'completed', 'message': 'Quiz generation complete.'})}\n\n"
+===== schemas.py =====
+from pydantic import BaseModel
+from typing import List, Optional
+
+# =========================
+# SHARED INPUT SCHEMAS
+# =========================
+
+class CourseBase(BaseModel):
+    name: str
+
+class CourseCreate(CourseBase):
+    pass
+
+class YearBase(BaseModel):
+    name: str
+
+class YearCreate(YearBase):
+    pass
+
+class SemesterBase(BaseModel):
+    name: str
+
+class SemesterCreate(SemesterBase):
+    pass
+
+class UnitBase(BaseModel):
+    name: str
+
+class UnitCreate(UnitBase):
+    pass
+
+# =========================
+# OUTPUT MODELS (NESTED)
+# =========================
+
+class Unit(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class Semester(BaseModel):
+    id: int
+    name: str
+    units: List[Unit] = []
+
+    class Config:
+        from_attributes = True
+
+class Year(BaseModel):
+    id: int
+    name: str
+    semesters: List[Semester] = []
+
+    class Config:
+        from_attributes = True
+
+class Course(BaseModel):
+    id: int
+    name: str
+    years: List[Year] = []
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# FLAT OUTPUTS (FOR LISTING)
+# =========================
+
+class CourseOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class YearOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class SemesterOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class UnitOut(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# DOCUMENT SCHEMAS
+# =========================
+
+class DocumentBase(BaseModel):
+    filename: str
+    filepath: str
+    unit_id: int
+
+class Document(DocumentBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class DocumentWithPath(BaseModel):
+    id: int
+    filename: str
+    filepath: str
+    course_path: str  # e.g., "CS → Year 1 → Sem 2 → Data Structures"
+
+    class Config:
+        from_attributes = True
+        
+# =========================
+# TOPIC/UNIT SCHEMA (for Topics Page)
+# =========================
+
+class UnitTopicOut(BaseModel):
+    id: int
+    name: str
+    quiz_count: int
+
+    class Config:
+        from_attributes = True
+
+# =========================
+# ASK REQUEST SCHEMA
+# =========================
+
+class AskRequest(BaseModel):
+    unit_id: int
+    question: str
+
+# =========================
+# QUIZ QUESTION SCHEMA
+# =========================
+
+class QuizQuestion(BaseModel):
+    id: int
+    unit_id: int
+    question: str
+    options: str  # JSON string of options
+    correct_answer: str
+    explanation: Optional[str] = None # Make explanation optional for the schema
+    chunk_id: Optional[int] = None # Make chunk_id optional for the schema
+
+    class Config:
+        from_attributes = True
+
+===== speller.py =====
+# speller.py
+import unicodedata
+import difflib
+from spellchecker import SpellChecker
+
+class SpellingCorrector:
+    def __init__(self, language: str = 'en'):
+        """
+        Initialize the spell checker and prepare a known-word list for fallback corrections.
+        :param language: Language for the dictionary (default 'en' for English).
+        """
+        # Primary spellchecker
+        self.spell = SpellChecker(language=language)
+        # Build a list of known words from the spellchecker's frequency dictionary
+        self.known_words = list(self.spell.word_frequency.keys())
+
+    def _normalize_unicode(self, text: str) -> str:
+        """
+        Normalize Unicode text (e.g., decompose ligatures) to their compatibility forms.
+        This converts characters like “ﬁ” to "fi".
+        """
+        return unicodedata.normalize("NFKC", text)
+
+    def correct_sentence(self, sentence: str) -> str:
+        """
+        Corrects the spelling of each word in the input sentence.
+        Steps:
+        1. Normalize Unicode (decompose ligatures, etc.).
+        2. Use SpellChecker for a primary correction.
+        3. If SpellChecker returns the same word or no suggestion, fall back to difflib
+           against the known-word list with a moderate similarity cutoff.
+        4. Preserve original casing (title case or uppercase) where applicable.
+        Skips correction for very short words (length <= 2).
+
+        :param sentence: The input sentence to correct.
+        :return: The corrected sentence.
+        """
+        # Step 1: Normalize Unicode ligatures (e.g. “ofﬁce” → "office")
+        sentence = self._normalize_unicode(sentence)
+
+        words = sentence.split()
+        corrected_words = []
+
+        for word in words:
+            lower = word.lower()
+            # Skip very short words or words already recognized
+            if len(lower) <= 2 or lower in self.spell:
+                corrected_words.append(word)
+                continue
+
+            # Step 2: Primary SpellChecker correction
+            primary = self.spell.correction(lower)
+            if primary and primary != lower:
+                # Preserve original casing
+                if word.istitle():
+                    primary = primary.capitalize()
+                elif word.isupper():
+                    primary = primary.upper()
+                corrected_words.append(primary)
+                continue
+
+            # Step 3: Fallback via difflib with a moderate cutoff
+            matches = difflib.get_close_matches(lower, self.known_words, n=1, cutoff=0.5)
+            if matches:
+                best = matches[0]
+                if word.istitle():
+                    best = best.capitalize()
+                elif word.isupper():
+                    best = best.upper()
+                corrected_words.append(best)
+            else:
+                corrected_words.append(word)
+
+        return " ".join(corrected_words)

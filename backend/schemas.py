@@ -119,6 +119,18 @@ class DocumentWithPath(BaseModel):
 
     class Config:
         from_attributes = True
+        
+# =========================
+# TOPIC/UNIT SCHEMA (for Topics Page)
+# =========================
+
+class UnitTopicOut(BaseModel):
+    id: int
+    name: str
+    quiz_count: int
+
+    class Config:
+        from_attributes = True
 
 # =========================
 # ASK REQUEST SCHEMA
