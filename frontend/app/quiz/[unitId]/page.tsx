@@ -44,6 +44,7 @@ type QuizStats = {
 };
 
 const SWIPE_CONFIDENCE_THRESHOLD = 10000;
+const SWIPE_VERTICAL_CONFIDENCE_THRESHOLD = 10000;
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export default function TikTokQuizPage() {
@@ -74,6 +75,48 @@ export default function TikTokQuizPage() {
   
   // Refs
   const constraintsRef = useRef(null);
+  const lastNavTimeRef = useRef(Date.now());
+  const NAV_THROTTLE_MS = 600;
+
+  // Add wheel and keyboard navigation
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      const now = Date.now();
+      if (now - lastNavTimeRef.current < NAV_THROTTLE_MS) return;
+      if (showResult) return;
+      if (e.deltaY > 0) {
+        // Scroll down: next question
+        setDirection(2);
+        nextQuestion();
+        lastNavTimeRef.current = now;
+      } else if (e.deltaY < 0) {
+        // Scroll up: previous question
+        setDirection(-2);
+        previousQuestion();
+        lastNavTimeRef.current = now;
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const now = Date.now();
+      if (now - lastNavTimeRef.current < NAV_THROTTLE_MS) return;
+      if (showResult) return;
+      if (e.key === "ArrowDown") {
+        setDirection(2);
+        nextQuestion();
+        lastNavTimeRef.current = now;
+      } else if (e.key === "ArrowUp") {
+        setDirection(-2);
+        previousQuestion();
+        lastNavTimeRef.current = now;
+      }
+    };
+    window.addEventListener("wheel", handleWheel, { passive: true });
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("wheel", handleWheel);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showResult, currentIndex, questions.length]);
 
   useEffect(() => {
     if (!unitId) return;
@@ -161,12 +204,28 @@ export default function TikTokQuizPage() {
   };
 
   const handleDragEnd = (event: any, info: PanInfo) => {
-    const swipe = swipePower(info.offset.x, info.velocity.x);
+    const swipeX = swipePower(info.offset.x, info.velocity.x);
+    const swipeY = swipePower(info.offset.y, info.velocity.y);
 
-    if (swipe < -SWIPE_CONFIDENCE_THRESHOLD) {
+    // Horizontal swipe
+    if (swipeX < -SWIPE_CONFIDENCE_THRESHOLD) {
+      setDirection(1); // right to left
       nextQuestion();
-    } else if (swipe > SWIPE_CONFIDENCE_THRESHOLD) {
+      return;
+    } else if (swipeX > SWIPE_CONFIDENCE_THRESHOLD) {
+      setDirection(-1); // left to right
       previousQuestion();
+      return;
+    }
+    // Vertical swipe
+    if (swipeY < -SWIPE_VERTICAL_CONFIDENCE_THRESHOLD) {
+      setDirection(2); // up
+      nextQuestion();
+      return;
+    } else if (swipeY > SWIPE_VERTICAL_CONFIDENCE_THRESHOLD) {
+      setDirection(-2); // down
+      previousQuestion();
+      return;
     }
   };
 
@@ -297,29 +356,44 @@ export default function TikTokQuizPage() {
             key={currentIndex}
             custom={direction}
             variants={{
-              enter: (direction: number) => ({
-                x: direction > 0 ? 1000 : -1000,
-                opacity: 0
-              }),
+              enter: (direction: number) => {
+                if (direction === 2) {
+                  return { y: 1000, opacity: 0 };
+                } else if (direction === -2) {
+                  return { y: -1000, opacity: 0 };
+                } else if (direction > 0) {
+                  return { x: 1000, opacity: 0 };
+                } else {
+                  return { x: -1000, opacity: 0 };
+                }
+              },
               center: {
                 zIndex: 1,
                 x: 0,
+                y: 0,
                 opacity: 1
               },
-              exit: (direction: number) => ({
-                zIndex: 0,
-                x: direction < 0 ? 1000 : -1000,
-                opacity: 0
-              })
+              exit: (direction: number) => {
+                if (direction === 2) {
+                  return { zIndex: 0, y: -1000, opacity: 0 };
+                } else if (direction === -2) {
+                  return { zIndex: 0, y: 1000, opacity: 0 };
+                } else if (direction < 0) {
+                  return { zIndex: 0, x: 1000, opacity: 0 };
+                } else {
+                  return { zIndex: 0, x: -1000, opacity: 0 };
+                }
+              }
             }}
             initial="enter"
             animate="center"
             exit="exit"
             transition={{
               x: { type: "spring", stiffness: 300, damping: 30 },
+              y: { type: "spring", stiffness: 300, damping: 30 },
               opacity: { duration: 0.2 }
             }}
-            drag="x"
+            drag="xy"
             dragConstraints={constraintsRef}
             dragElastic={1}
             onDragEnd={handleDragEnd}
@@ -449,6 +523,26 @@ export default function TikTokQuizPage() {
           </div>
         </div>
 
+        {/* Manual navigation controls */}
+        <div className="absolute left-1/2 bottom-20 transform -translate-x-1/2 flex space-x-4 z-50">
+          <Button
+            variant="secondary"
+            onClick={() => { setDirection(-1); previousQuestion(); }}
+            disabled={currentIndex === 0}
+            className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+          >
+            Previous
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => { setDirection(1); nextQuestion(); }}
+            disabled={currentIndex === questions.length - 1}
+            className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+          >
+            Next
+          </Button>
+        </div>
+
         {/* Bottom hint */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -456,7 +550,7 @@ export default function TikTokQuizPage() {
           transition={{ delay: 1 }}
           className="absolute bottom-8 left-1/2 transform -translate-x-1/2 text-center text-white/60"
         >
-          <p className="text-sm">Swipe left for next • Swipe right for previous</p>
+          <p className="text-sm">Swipe left/right or up/down for next/previous • Or use the buttons below</p>
         </motion.div>
       </div>
 
