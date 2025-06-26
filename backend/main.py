@@ -67,7 +67,7 @@ os.makedirs(VECTOR_ROOT, exist_ok=True)
 # -----------------------
 # Groq client (hardcoded API key)
 # -----------------------
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 groq_client  = Groq(api_key=GROQ_API_KEY)
 
 # -----------------------

@@ -45,3 +45,400 @@
 .animate-float {
   animation: float 6s ease-in-out infinite;
 }
+
+/* TikTok-Style Quiz Animations */
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 4s linear infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(168, 85, 247, 0.8), 0 0 30px rgba(168, 85, 247, 0.6);
+  }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes float-up {
+  0% {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-100px);
+    opacity: 0;
+  }
+}
+
+.float-up {
+  animation: float-up 1s ease-out forwards;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes heart-beat {
+  0% { transform: scale(1); }
+  14% { transform: scale(1.3); }
+  28% { transform: scale(1); }
+  42% { transform: scale(1.3); }
+  70% { transform: scale(1); }
+}
+
+.heart-beat {
+  animation: heart-beat 1s ease-in-out;
+}
+
+/* Custom scrollbar for quiz pages */
+.quiz-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.quiz-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.quiz-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(168, 85, 247, 0.6);
+  border-radius: 2px;
+}
+
+.quiz-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(168, 85, 247, 0.8);
+}
+
+/* TikTok-style card hover effects */
+.tiktok-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tiktok-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Gradient text animations */
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.gradient-text {
+  background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+  background-size: 400% 400%;
+  animation: gradient-shift 3s ease infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Smooth transitions for better UX */
+* {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Line clamp utilities */
+.line-clamp-1 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.line-clamp-3 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* Custom button hover effects */
+.quiz-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.quiz-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.quiz-button:hover::before {
+  left: 100%;
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+  .tiktok-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+  
+  .tiktok-card:active {
+    transform: scale(0.98);
+  }
+}
+
+/* Touch-friendly animations */
+@media (hover: none) and (pointer: coarse) {
+  .tiktok-card:hover {
+    transform: none;
+  }
+  
+  .tiktok-card:active {
+    transform: scale(0.95);
+    transition: transform 0.1s;
+  }
+}
+
+/* Quiz progress indicator */
+.quiz-progress {
+  background: linear-gradient(90deg, #8b5cf6 0%, #ec4899 50%, #06b6d4 100%);
+  background-size: 200% 100%;
+  animation: gradient-shift 2s ease infinite;
+}
+
+/* Confetti particles */
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(-100vh) rotate(0deg);
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+  }
+}
+
+.confetti-particle {
+  position: fixed;
+  width: 10px;
+  height: 10px;
+  background: #8b5cf6;
+  animation: confetti-fall 3s linear infinite;
+  z-index: 1000;
+}
+
+/* Swipe indicators */
+.swipe-indicator {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 20px;
+  backdrop-filter: blur(10px);
+}
+
+.swipe-arrow {
+  width: 20px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.6);
+  position: relative;
+}
+
+.swipe-arrow::after {
+  content: '';
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid rgba(255, 255, 255, 0.6);
+  border-top: 2px solid rgba(255, 255, 255, 0.6);
+  transform: rotate(45deg);
+}
+
+@keyframes swipe-hint {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: 0.6; }
+  50% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+}
+
+.swipe-indicator {
+  animation: swipe-hint 2s ease-in-out infinite;
+}
+
+/* Quiz card stack effect */
+.quiz-stack {
+  position: relative;
+}
+
+.quiz-stack .quiz-card:nth-child(1) {
+  z-index: 3;
+  transform: translateY(0) scale(1);
+}
+
+.quiz-stack .quiz-card:nth-child(2) {
+  z-index: 2;
+  transform: translateY(10px) scale(0.95);
+  opacity: 0.8;
+}
+
+.quiz-stack .quiz-card:nth-child(3) {
+  z-index: 1;
+  transform: translateY(20px) scale(0.9);
+  opacity: 0.6;
+}
+
+/* Achievement unlock animation */
+@keyframes unlock-achievement {
+  0% {
+    transform: scale(0) rotate(-180deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2) rotate(10deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.achievement-unlock {
+  animation: unlock-achievement 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* Score counter animation */
+@keyframes score-count-up {
+  0% { transform: translateY(20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.score-counter {
+  animation: score-count-up 0.5s ease-out;
+}
+
+/* Streak fire effect */
+@keyframes fire-flicker {
+  0%, 100% { transform: scale(1) rotate(-1deg); }
+  33% { transform: scale(1.1) rotate(1deg); }
+  66% { transform: scale(0.9) rotate(-1deg); }
+}
+
+.streak-fire {
+  animation: fire-flicker 0.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.6));
+}
+
+/* Loading shimmer effect */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  animation: shimmer 1.5s infinite;
+}
+
+/* Custom focus styles for accessibility */
+.quiz-focus:focus-visible {
+  outline: 2px solid #8b5cf6;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .quiz-card {
+    border: 2px solid rgba(255, 255, 255, 0.8);
+  }
+  
+  .quiz-button {
+    border: 2px solid currentColor;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  .tiktok-card:hover {
+    transform: none;
+  }
+}
+
+/* Dark mode optimizations */
+@media (prefers-color-scheme: dark) {
+  .quiz-card {
+    background: rgba(0, 0, 0, 0.8);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* Print styles */
+@media print {
+  .quiz-sidebar,
+  .swipe-indicator,
+  .floating-elements {
+    display: none;
+  }
+  
+  .quiz-card {
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+  }
+}
